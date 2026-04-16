@@ -1,0 +1,28 @@
+openapi: 3.0.4
+info:
+  title: Products API
+  version: 1.0.0
+servers:
+  - url: https://api.products.example.com
+paths:
+  /products:
+    get:
+      operationId: listProducts
+      summary: List all products
+      description: Retrieve a list of all products
+      responses:
+        '200':
+          description: Successful response
+    post:
+      operationId: createProduct
+      summary: Create a product
+      description: Create a new product
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '201':
+          description: Product created

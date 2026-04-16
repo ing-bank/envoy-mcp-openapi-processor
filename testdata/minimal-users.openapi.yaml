@@ -1,0 +1,48 @@
+openapi: 3.0.4
+info:
+  title: Users API
+  version: 1.0.0
+servers:
+  - url: https://api.users.example.com
+paths:
+  /users:
+    get:
+      operationId: listUsers
+      summary: List all users
+      description: Retrieve a list of all users
+      responses:
+        '200':
+          description: Successful response
+    post:
+      # operationId intentionally omitted to verify that the tool creation is skipped when operationId is missing
+      summary: Create a new user
+      description: Create a new user with the provided information
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                email:
+                  type: string
+      responses:
+        '201':
+          description: User created successfully
+  /users/{userId}:
+    get:
+      operationId: getUser
+      summary: Get user by ID
+      description: Retrieve a specific user by their ID
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The user ID
+      responses:
+        '200':
+          description: Successful response

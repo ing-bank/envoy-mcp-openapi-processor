@@ -1,0 +1,49 @@
+services:
+  envoy-mcp-openapi-processor:
+    image: envoy-mcp-openapi-processor:latest
+    build:
+      context: ../..
+      dockerfile: examples/mcp-server/Dockerfile
+    volumes:
+      - shared-uds:/var/run/shared
+      - "../../testdata/petstore.openapi.yaml:/home/app/conf/openapi/petstore.openapi.yaml:ro"
+    depends_on:
+      - prism
+  envoy:
+    image: envoyproxy/envoy:distroless-v1.37.2
+    user: "10042"
+    ports:
+      - "127.0.0.1:10000:10000"
+    volumes:
+      - shared-uds:/var/run/shared
+      - "./envoy-mcp.yaml:/etc/envoy/envoy-mcp.yaml:ro"
+    command: ["--config-path", "/etc/envoy/envoy-mcp.yaml", "--log-level", "info"]
+    depends_on:
+      - envoy-mcp-openapi-processor
+  prism:
+    image: stoplight/prism:5.14.3
+    command:
+      - "mock"
+      - "-h"
+      - "0.0.0.0"
+      - "-p"
+      - "8080"
+      - "/openapi/petstore.openapi.yaml"
+    volumes:
+      - "../../testdata/petstore.openapi.yaml:/openapi/petstore.openapi.yaml:ro"
+  inspector:
+    image: ghcr.io/modelcontextprotocol/inspector:0.21.1
+    ports:
+      - "127.0.0.1:6274:6274"
+    environment:
+      HOST: "0.0.0.0"
+      MCP_AUTO_OPEN_ENABLED: "false"
+    healthcheck:
+      test: "node -e \"require('http').get('http://127.0.0.1:6274', (res) => process.exit(res.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))\""
+      interval: 1s
+      timeout: 1s
+      retries: 5
+      start_period: 1s
+
+volumes:
+  shared-uds:
