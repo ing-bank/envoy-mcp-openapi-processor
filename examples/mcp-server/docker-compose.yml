@@ -21,18 +21,20 @@ services:
     depends_on:
       - envoy-mcp-openapi-processor
   prism:
-    image: stoplight/prism:5.14.3
+    image: stoplight/prism:5.15.10
     command:
       - "mock"
       - "-h"
       - "0.0.0.0"
+      - "--multiprocess"
+      - "false" # workaround for https://github.com/stoplightio/prism/issues/2763
       - "-p"
       - "8080"
       - "/openapi/petstore.openapi.yaml"
     volumes:
       - "../../testdata/petstore.openapi.yaml:/openapi/petstore.openapi.yaml:ro"
   inspector:
-    image: ghcr.io/modelcontextprotocol/inspector:0.21.1
+    image: ghcr.io/modelcontextprotocol/inspector:0.21.2-hotfix-3
     ports:
       - "127.0.0.1:6274:6274"
     environment:
