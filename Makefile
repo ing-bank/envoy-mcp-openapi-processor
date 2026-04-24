@@ -7,7 +7,10 @@ test:
 	go test ./...
 
 lint:
-	golangci-lint run ./...
+	golangci-lint run
+
+lint-fix:
+	golangci-lint run --fix
 
 coverage:
 	@go test -coverprofile=$(COVERAGE_PROFILE) ./...

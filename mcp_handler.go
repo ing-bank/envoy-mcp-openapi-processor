@@ -363,5 +363,4 @@ func buildMCPResponse(ctx context.Context, jsonrpcID jsonrpc.ID, body []byte, co
 		return nil, err
 	}
 	return message, nil
-
 }
