@@ -1,0 +1,21 @@
+version: 2
+updates:
+  - package-ecosystem: "gomod"
+    directories:
+      - "/"
+      - "examples/*"
+    schedule:
+      interval: "weekly"
+    groups:
+      go:
+        patterns:
+          - "*"
+  - package-ecosystem: "docker"
+    directories: 
+      - "examples/*"
+    schedule:
+      interval: "weekly"
+    groups:
+      docker:
+        patterns:
+          - "*"
