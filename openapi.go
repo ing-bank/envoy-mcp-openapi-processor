@@ -39,7 +39,6 @@ func loadToolsFromOpenAPI(path string, config *ToolRegistryConfig) (*toolRegistr
 }
 
 func newToolRegistryFromConfig(config *ToolRegistryConfig) (*toolRegistry, error) {
-
 	zap.L().Info("Loading OpenAPI specs matching pattern", zap.String("pattern", config.OpenAPISpecPattern))
 
 	matches, err := filepath.Glob(config.OpenAPISpecPattern)

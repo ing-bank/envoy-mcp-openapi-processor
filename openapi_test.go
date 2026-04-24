@@ -48,11 +48,11 @@ func TestNewToolRegistryFromOpenApiSpec_InvalidGlobPattern(t *testing.T) {
 func TestNewToolRegistryFromOpenApiSpec_SkipsDirectories(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	require.NoError(t, os.Mkdir(tmpDir+"/subdir.openapi.yaml", 0700))
+	require.NoError(t, os.Mkdir(tmpDir+"/subdir.openapi.yaml", 0o700))
 
 	spec1, err := os.ReadFile("testdata/minimal-users.openapi.yaml")
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(tmpDir+"/valid.openapi.yaml", spec1, 0600))
+	require.NoError(t, os.WriteFile(tmpDir+"/valid.openapi.yaml", spec1, 0o600))
 
 	registry, err := newToolRegistryFromConfig(&ToolRegistryConfig{OpenAPISpecPattern: tmpDir + "/*.openapi.yaml"})
 
