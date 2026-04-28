@@ -36,7 +36,6 @@ const (
 var tracer = otel.Tracer(componentName)
 
 func (s *extProcServer) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
-
 	var jsonrpcID jsonrpc.ID
 	var currentToolRepConfig *toolResponseConfig
 	var currentUpstreamStatusCode int

@@ -1,0 +1,16 @@
+version: "2"
+
+linters:
+  enable:
+    # default golangci-lint linters
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+
+formatters:
+  enable:
+    - gofmt
+    - gofumpt
+    - goimports
