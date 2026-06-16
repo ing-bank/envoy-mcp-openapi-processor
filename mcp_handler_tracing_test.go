@@ -2,12 +2,12 @@ package envoy_mcp_openapi_processor
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -115,6 +115,8 @@ func TestMcpRequestHandler_Tracing(t *testing.T) {
 			testSpan, found := findSpanByName(spans, spanName)
 			assert.True(t, found, "span '%s' not found", spanName)
 
+			assert.Equal(t, int64(len(tt.requestBody)), getIntSpanAttribute(testSpan, attrBodySize), "body.size")
+
 			// Verify attributes if method is expected
 			if tt.wantMethod != "" {
 				got := getSpanAttribute(testSpan, string(semconv.RPCMethodKey))
@@ -204,13 +206,18 @@ func TestMcpResponseHandler_Tracing(t *testing.T) {
 				errInfo = &errorInfo{"test reason"}
 			}
 			resp := server.mcpResponseHandler(ctx, []byte(tt.responseBody), tt.jsonrpcID, &toolResponseConfig{}, errInfo)
-			assert.NotNil(t, resp, "Expected non-nil response")
+			assert.NotNil(t, resp.headers, "Expected non-nil response")
 
 			rootSpan.End()
 			spans := spanRecorder.Ended()
 
 			testSpan, found := findSpanByName(spans, spanName)
 			assert.True(t, found, "span not found for %s", spanName)
+
+			assert.Equal(t, int64(len(tt.responseBody)), getIntSpanAttribute(testSpan, attrBodySize), "body.size")
+			assert.True(t, getBoolSpanAttribute(testSpan, attrResponseToolCallContextPresent), "response.tool_call_ctx_present")
+			assert.True(t, getBoolSpanAttribute(testSpan, attrResponseJSONRPCIDPresent), "response.jsonrpcid_present")
+			assert.Equal(t, fmt.Sprint(tt.jsonrpcID.Raw()), getSpanAttribute(testSpan, attrJSONRPCID), "jsonrpc.id")
 
 			// Verify error events match expectations
 			assertExceptionEvents(t, testSpan, tt.wantErrorEvent, tt.wantExceptionType)
@@ -258,22 +265,22 @@ func TestMcpResponseHandler_ErrorTracing(t *testing.T) {
 			resp := server.mcpResponseHandler(ctx, []byte(`{"status":"ok"}`), tt.jsonrpcID, tt.config, nil)
 			span.End()
 
-			require.NotNil(t, resp)
+			require.NotNil(t, resp.headers)
 			recorded, found := findSpanByName(spanRecorder.Ended(), spanName)
 			require.True(t, found, "span %q not found", spanName)
 			assert.Equal(t, tt.wantStatusCode, recorded.Status().Code, "span status")
+			assert.Equal(t, tt.jsonrpcID.IsValid(), getBoolSpanAttribute(recorded, attrResponseJSONRPCIDPresent), "response.jsonrpcid_present")
+			assert.Equal(t, tt.config != nil, getBoolSpanAttribute(recorded, attrResponseToolCallContextPresent), "response.tool_call_ctx_present")
 			assertExceptionEvents(t, recorded, tt.HasException, tt.wantExceptionType)
 		})
 	}
 }
 
-// setupTestTracer creates a tracer with an in-memory span recorder for testing
 func setupTestTracer() (trace.Tracer, *tracetest.SpanRecorder) {
 	spanRecorder := tracetest.NewSpanRecorder()
 	tracerProvider := sdktrace.NewTracerProvider(
 		sdktrace.WithSpanProcessor(spanRecorder),
 	)
-	otel.SetTracerProvider(tracerProvider)
 	tracer := tracerProvider.Tracer("test-tracer")
 	return tracer, spanRecorder
 }
@@ -286,6 +293,16 @@ func getSpanAttribute(span sdktrace.ReadOnlySpan, key string) string {
 		}
 	}
 	return ""
+}
+
+// getIntSpanAttribute returns the int64 value of a span attribute, or -1 if not found.
+func getIntSpanAttribute(span sdktrace.ReadOnlySpan, key string) int64 {
+	for _, attr := range span.Attributes() {
+		if string(attr.Key) == key {
+			return attr.Value.AsInt64()
+		}
+	}
+	return -1
 }
 
 // getBoolSpanAttribute returns the boolean value of a span attribute, or false if not found.

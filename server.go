@@ -5,14 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"os"
+	"strings"
 
 	extProcPb "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
-	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
@@ -23,125 +23,54 @@ import (
 
 type extProcServer struct {
 	extProcPb.UnimplementedExternalProcessorServer
-	registry   *toolRegistry
-	serverInfo ServerInfo
+	registry     *toolRegistry
+	serverInfo   ServerInfo
+	allowedHosts *hostAllowlist
 }
-
-const (
-	kb = 1024
-	mb = 1024 * kb
-)
 
 // if otel.SetTracerProvider(...) was not called by the library user, this will return a no-op tracer
 var tracer = otel.Tracer(componentName)
 
 func (s *extProcServer) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
-	var jsonrpcID jsonrpc.ID
-	var currentToolRepConfig *toolResponseConfig
-	var currentUpstreamStatusCode int
+	strm := &stream{
+		server: s,
+		buf:    make([]byte, 0, initialBodyBufCap),
+	}
+	var state streamState = &stateAwaitingRequestHeaders{}
 
-	// Extract trace context from the incoming gRPC stream context
 	ctx := srv.Context()
-
-	// Create a root span for the entire Process stream
 	ctx, processSpan := tracer.Start(ctx, "ext_proc.Process",
 		trace.WithSpanKind(trace.SpanKindServer),
 	)
 	defer processSpan.End()
 
+	fail := func(err error, msg string) error {
+		processSpan.RecordError(err)
+		processSpan.SetStatus(codes.Error, msg)
+		return status.Errorf(grpccodes.Unknown, "%s: %v", msg, err)
+	}
+
 	for {
 		req, err := srv.Recv()
 		switch {
-		case errors.Is(err, io.EOF), errors.Is(err, status.Error(grpccodes.Canceled, context.Canceled.Error())):
+		case errors.Is(err, io.EOF) || status.Code(err) == grpccodes.Canceled:
 			return nil
 		case err != nil:
-			processSpan.RecordError(err)
-			processSpan.SetStatus(codes.Error, "error receiving request")
-			return status.Errorf(grpccodes.Unknown, "error receiving request: %v", err)
+			return fail(err, "error receiving request")
 		}
 
-		var resp *extProcPb.ProcessingResponse
-
-		switch value := req.Request.(type) {
-		case *extProcPb.ProcessingRequest_RequestHeaders:
-			_, span := tracer.Start(ctx, "ext_proc.request_headers",
-				trace.WithSpanKind(trace.SpanKindInternal),
-			)
-
-			resp = &extProcPb.ProcessingResponse{
-				Response: &extProcPb.ProcessingResponse_RequestHeaders{
-					RequestHeaders: &extProcPb.HeadersResponse{
-						Response: &extProcPb.CommonResponse{},
-					},
-				},
-			}
-			span.End()
-
-		case *extProcPb.ProcessingRequest_RequestBody:
-			ctx, span := tracer.Start(ctx, "ext_proc.request_body",
-				trace.WithSpanKind(trace.SpanKindInternal),
-			)
-			span.SetAttributes(
-				attribute.Int(attrBodySize, len(value.RequestBody.GetBody())),
-			)
-
-			handlerResult := s.mcpRequestHandler(ctx, value.RequestBody.GetBody())
-			jsonrpcID = handlerResult.Id
-			currentUpstreamStatusCode = 0
-			resp = handlerResult.ProcRep
-			if handlerResult.ToolConfigRef != nil {
-				currentToolRepConfig = &handlerResult.ToolConfigRef.toolResponseConfig
-			}
-			span.End()
-
-		case *extProcPb.ProcessingRequest_ResponseHeaders:
-			// processing of response headers is needed to prevent envoy from
-			// returning empty body to the client in case of upstreams response
-			// without a body (e.g., 204 No Content)
-			_, span := tracer.Start(ctx, "ext_proc.response_headers",
-				trace.WithSpanKind(trace.SpanKindInternal),
-			)
-
-			if statusCode, ok := parseUpstreamStatusCode(value.ResponseHeaders.GetHeaders()); ok {
-				currentUpstreamStatusCode = statusCode
-			}
-
-			if value.ResponseHeaders.GetEndOfStream() {
-				resp = buildEndOfStreamResponse(ctx, jsonrpcID, currentUpstreamStatusCode, currentToolRepConfig)
-			} else {
-				resp = &extProcPb.ProcessingResponse{
-					Response: &extProcPb.ProcessingResponse_ResponseHeaders{
-						ResponseHeaders: &extProcPb.HeadersResponse{
-							Response: &extProcPb.CommonResponse{},
-						},
-					},
-				}
-			}
-
-			span.End()
-		case *extProcPb.ProcessingRequest_ResponseBody:
-			ctx, span := tracer.Start(ctx, "ext_proc.response_body",
-				trace.WithSpanKind(trace.SpanKindInternal),
-			)
-			span.SetAttributes(attribute.Int(attrBodySize, len(value.ResponseBody.GetBody())))
-			span.SetAttributes(attribute.Bool(attrResponseToolCallContextPresent, currentToolRepConfig != nil))
-			span.SetAttributes(attribute.Bool(attrResponseJSONRPCIDPresent, jsonrpcID.IsValid()))
-			if jsonrpcID.IsValid() {
-				span.SetAttributes(
-					attribute.String(attrJSONRPCID, fmt.Sprint(jsonrpcID)),
-				)
-			}
-			resp = s.mcpResponseHandler(ctx, value.ResponseBody.GetBody(), jsonrpcID, currentToolRepConfig, httpStatusToErrorInfo(currentUpstreamStatusCode))
-			span.End()
-
-		default:
-			continue
-		}
-
-		if err := srv.Send(resp); err != nil {
+		next, reps, err := state.handle(ctx, strm, req)
+		if err != nil {
 			processSpan.RecordError(err)
-			processSpan.SetStatus(codes.Error, "error sending response")
-			return status.Errorf(grpccodes.Unknown, "error sending response: %v", err)
+			processSpan.SetStatus(codes.Error, err.Error())
+			return err
+		}
+		state = next
+
+		for _, rep := range reps {
+			if err := srv.Send(rep); err != nil {
+				return fail(err, "error sending response")
+			}
 		}
 	}
 }
@@ -176,10 +105,8 @@ func RunServer(ctx context.Context, cfg *Config) error {
 		zap.L().Info("Tools after filtering", zap.String("tools", registry.String()))
 	}
 
-	if _, err := os.Stat(cfg.SocketPath); err == nil {
-		if err := os.Remove(cfg.SocketPath); err != nil {
-			return err
-		}
+	if err := os.Remove(cfg.SocketPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
 	}
 	lis, err := net.ListenUnix("unix", &net.UnixAddr{
 		Name: cfg.SocketPath,
@@ -200,13 +127,18 @@ func RunServer(ctx context.Context, cfg *Config) error {
 			otelgrpc.WithTracerProvider(otel.GetTracerProvider()),
 			otelgrpc.WithMessageEvents(otelgrpc.ReceivedEvents, otelgrpc.SentEvents),
 		)),
-		grpc.MaxRecvMsgSize(100*mb),
-		grpc.MaxSendMsgSize(100*mb),
 	)
 
+	allowedHosts := cfg.AllowedHosts
+	if len(allowedHosts) == 0 {
+		allowedHosts = defaultAllowedHosts
+	}
+	zap.L().Info("Host/Origin validation (DNS rebinding protection) enabled", zap.Strings("allowedHosts", allowedHosts))
+
 	extProcPb.RegisterExternalProcessorServer(grpcServer, &extProcServer{
-		registry:   registry,
-		serverInfo: cfg.ServerInfo,
+		registry:     registry,
+		serverInfo:   cfg.ServerInfo,
+		allowedHosts: newHostAllowlist(allowedHosts),
 	})
 
 	go func() {
@@ -216,10 +148,7 @@ func RunServer(ctx context.Context, cfg *Config) error {
 	}()
 
 	zap.L().Info("Starting ext_proc server", zap.String("address", lis.Addr().String()))
-	if err := grpcServer.Serve(lis); err != nil {
-		return err
-	}
-	return nil
+	return grpcServer.Serve(lis)
 }
 
 // ServerInfo holds the identity and instructions returned in the MCP initialize response.
@@ -240,6 +169,17 @@ type Config struct {
 	ToolRegistryConfig *ToolRegistryConfig
 	// ServerInfo configures the identity and instructions for the MCP server.
 	ServerInfo ServerInfo
+	// AllowedHosts is the list of hostnames accepted in the Host/:authority and
+	// Origin headers of incoming requests (DNS rebinding protection). Matching
+	// is case-insensitive and ignores ports. Each entry is one of:
+	//   - "*" — match any host (disables rebinding protection; opt-in only);
+	//   - "*.example.org" — match any subdomain at any depth (foo.example.org,
+	//     a.b.example.org) but NOT the apex example.org;
+	//   - "host.example.org" — exact match.
+	// Empty means the default policy: localhost, 127.0.0.1 and ::1. A non-empty
+	// list REPLACES the default — include "localhost" explicitly if it should
+	// remain allowed.
+	AllowedHosts []string
 }
 
 func (c *Config) validate() error {
@@ -249,5 +189,29 @@ func (c *Config) validate() error {
 	if c.SocketPath == "" {
 		return errors.New("config.SocketPath must not be empty")
 	}
+	for _, h := range c.AllowedHosts {
+		if !validAllowedHost(h) {
+			return fmt.Errorf(`config.AllowedHosts entry %q must be a plain hostname or wildcard ("*", "*.example.com")`, h)
+		}
+	}
 	return nil
+}
+
+// validAllowedHost reports whether an AllowedHosts entry is well-formed: the
+// bare "*", a "*.host" subdomain wildcard, or a plain hostname. Schemes, paths,
+// whitespace and malformed wildcards (e.g. "*.", "*.*", "a*b.com") are rejected
+// so misconfiguration fails loudly rather than silently allowing nothing.
+func validAllowedHost(h string) bool {
+	trimmed := strings.TrimSpace(h)
+	if trimmed == "" || strings.ContainsAny(trimmed, "/ \t") {
+		return false
+	}
+	if trimmed == "*" {
+		return true
+	}
+	if rest, ok := strings.CutPrefix(trimmed, "*."); ok {
+		// The remainder must be a plain hostname with no further wildcards.
+		return rest != "" && !strings.Contains(rest, "*")
+	}
+	return !strings.Contains(trimmed, "*")
 }

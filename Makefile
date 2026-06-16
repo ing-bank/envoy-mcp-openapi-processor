@@ -1,7 +1,7 @@
 COVERAGE_PROFILE := coverage.out
 COVERAGE_THRESHOLD := 70
 
-.PHONY: test coverage coverage-check coverage-report fuzz-request fuzz-response lint
+.PHONY: test coverage coverage-check coverage-report fuzz-request fuzz-response lint e2e
 
 test:
 	go test ./...
@@ -26,3 +26,6 @@ fuzz-request:
 
 fuzz-response:
 	go test -fuzz=FuzzMcpResponseHandler -parallel=4
+
+e2e:
+	./e2e/run.sh
