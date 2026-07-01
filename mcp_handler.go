@@ -56,30 +56,41 @@ const (
 )
 
 type mcpProcResponse struct {
-	Id            jsonrpc.ID
-	ProcRep       *extProcPb.ProcessingResponse
-	ToolConfigRef *toolConfig
+	Id jsonrpc.ID
+	// Exactly one of Immediate / Reroute is set. Immediate holds verbatim
+	// short-circuit responses (immediate body / status) sent as-is. Reroute holds
+	// a streamed request-body rewrite that the transport layer frames into wire
+	// messages (chunking, end-of-stream, trailers).
+	Immediate []*extProcPb.ProcessingResponse
+	Reroute   *streamedMutation
+	// ToolResponseConfig is set alongside Reroute and describes how to translate
+	// the upstream response back into an MCP envelope.
+	ToolResponseConfig *toolResponseConfig
 }
 
 func isHTTPErrorStatus(statusCode int) bool {
 	return statusCode == 0 || statusCode >= 400
 }
 
+func findHeader(headers *corev3.HeaderMap, key string) (string, bool) {
+	for _, h := range headers.GetHeaders() {
+		if h.GetKey() == key {
+			return string(h.GetRawValue()), true
+		}
+	}
+	return "", false
+}
+
 func parseUpstreamStatusCode(headers *corev3.HeaderMap) (int, bool) {
-	if headers == nil {
+	value, ok := findHeader(headers, ":status")
+	if !ok {
 		return 0, false
 	}
-	for _, h := range headers.GetHeaders() {
-		if h.GetKey() != ":status" {
-			continue
-		}
-		statusCode, err := strconv.Atoi(string(h.GetRawValue()))
-		if err != nil {
-			return 0, false
-		}
-		return statusCode, true
+	statusCode, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, false
 	}
-	return 0, false
+	return statusCode, true
 }
 
 func encodeJSONRPCError(id jsonrpc.ID, code int64, message string) []byte {
@@ -99,7 +110,7 @@ func encodeJSONRPCError(id jsonrpc.ID, code int64, message string) []byte {
 
 func jsonrpcErrorImmediateResponse(span trace.Span, id jsonrpc.ID, code int64, message string) *mcpProcResponse {
 	span.SetStatus(codes.Error, message)
-	return &mcpProcResponse{Id: id, ProcRep: newImmediateBodyResponse(encodeJSONRPCError(id, code, message))}
+	return &mcpProcResponse{Id: id, Immediate: newImmediateBodyResponse(encodeJSONRPCError(id, code, message))}
 }
 
 func toolExecutionErrorResponse(span trace.Span, id jsonrpc.ID, clientMessage string, traceReason string) *mcpProcResponse {
@@ -134,11 +145,12 @@ func jsonrpcImmediateResponse(span trace.Span, id jsonrpc.ID, result any) *mcpPr
 		span.RecordError(err)
 		return jsonrpcErrorImmediateResponse(span, id, jsonrpc.CodeInternalError, "Internal error")
 	}
-	return &mcpProcResponse{Id: id, ProcRep: newImmediateBodyResponse(message)}
+	return &mcpProcResponse{Id: id, Immediate: newImmediateBodyResponse(message)}
 }
 
 func (s *extProcServer) mcpRequestHandler(ctx context.Context, body []byte) *mcpProcResponse {
 	span := trace.SpanFromContext(ctx)
+	span.SetAttributes(attribute.Int(attrBodySize, len(body)))
 
 	msg, err := jsonrpc.DecodeMessage(body)
 	if err != nil {
@@ -153,25 +165,32 @@ func (s *extProcServer) mcpRequestHandler(ctx context.Context, body []byte) *mcp
 	}
 	span.SetAttributes(
 		semconv.RPCMethod(req.Method),
-		attribute.String(attrJSONRPCID, fmt.Sprint(req.ID)),
+		attribute.String(attrJSONRPCID, fmt.Sprint(req.ID.Raw())),
 		attribute.String(attrJSONRPCMethod, req.Method),
+		attribute.String(attrMCPMethod, mcpMethodLabel(req.Method)),
 	)
 	switch req.Method {
 	case methodInitialize:
-		span.SetAttributes(attribute.String(attrMCPMethod, methodInitialize))
 		return s.handleInitialize(span, req)
 	case methodNotificationsInitialized:
-		span.SetAttributes(attribute.String(attrMCPMethod, methodNotificationsInitialized))
-		return &mcpProcResponse{req.ID, httpStatusResponse(typev3.StatusCode_Accepted), nil}
+		return &mcpProcResponse{Id: req.ID, Immediate: httpStatusResponse(typev3.StatusCode_Accepted)}
 	case methodToolsList:
-		span.SetAttributes(attribute.String(attrMCPMethod, methodToolsList))
 		return jsonrpcImmediateResponse(span, req.ID, &mcp.ListToolsResult{Tools: s.registry.Tools()})
 	case methodToolsCall:
-		span.SetAttributes(attribute.String(attrMCPMethod, methodToolsCall))
 		return s.handleToolCall(span, req)
 	default:
-		span.SetAttributes(attribute.String(attrMCPMethod, "unknown"))
 		return jsonrpcErrorImmediateResponse(span, req.ID, jsonrpc.CodeMethodNotFound, "Method not found")
+	}
+}
+
+// mcpMethodLabel returns the method itself for supported MCP methods and
+// "unknown" otherwise, keeping the span attribute's cardinality bounded.
+func mcpMethodLabel(method string) string {
+	switch method {
+	case methodInitialize, methodNotificationsInitialized, methodToolsList, methodToolsCall:
+		return method
+	default:
+		return "unknown"
 	}
 }
 
@@ -230,21 +249,37 @@ func (s *extProcServer) handleToolCall(span trace.Span, req *jsonrpc.Request) *m
 		semconv.HTTPRoute(path),
 		semconv.HTTPRequestBodySize(len(requestBody)),
 	)
-	return &mcpProcResponse{req.ID, rerouteWithBodyMutation(toolConfig.Endpoint.Host, strings.ToUpper(toolConfig.Endpoint.Method), path, requestBody, endpointReq.extraHeaders), toolConfig}
+	return &mcpProcResponse{
+		Id:                 req.ID,
+		Reroute:            rerouteWithBodyMutation(toolConfig.Endpoint.Host, strings.ToUpper(toolConfig.Endpoint.Method), path, requestBody, endpointReq.extraHeaders),
+		ToolResponseConfig: &toolConfig.toolResponseConfig,
+	}
 }
 
-func buildEndOfStreamResponse(ctx context.Context, jsonrpcID jsonrpc.ID, upstreamStatusCode int, toolRepConfig *toolResponseConfig) *extProcPb.ProcessingResponse {
-	content := describeEmptyUpstreamResponse(upstreamStatusCode)
-	mcpRep := buildMCPCommonResponse(ctx, jsonrpcID, []byte(content), toolRepConfig, httpStatusToErrorInfo(upstreamStatusCode))
-	mcpRep.Status = extProcPb.CommonResponse_CONTINUE_AND_REPLACE
-	mcpRep.HeaderMutation.SetHeaders = appendHeader(
-		mcpRep.HeaderMutation.SetHeaders, ":status", strconv.Itoa(http.StatusOK),
-	)
-	return &extProcPb.ProcessingResponse{
-		Response: &extProcPb.ProcessingResponse_ResponseHeaders{
-			ResponseHeaders: &extProcPb.HeadersResponse{Response: mcpRep},
-		},
+func buildMCPResponsePayload(ctx context.Context, jsonrpcID jsonrpc.ID, body []byte, config *toolResponseConfig, errInfo *errorInfo) ([]byte, []*corev3.HeaderValueOption) {
+	span := trace.SpanFromContext(ctx)
+
+	buf, err := buildMCPResponse(ctx, jsonrpcID, body, config, errInfo)
+	if err != nil {
+		span.RecordError(err)
+		span.SetAttributes(attribute.String(attrResponseMarshalError, err.Error()))
+		span.SetStatus(codes.Error, "failed to build MCP response")
+		buf = encodeJSONRPCError(jsonrpcID, jsonrpc.CodeInternalError, "Internal error")
 	}
+
+	headers := appendHeader(nil, "content-type", "application/json")
+	headers = appendHeader(headers, "content-length", strconv.Itoa(len(buf)))
+	return buf, headers
+}
+
+// buildEndOfStreamResponse synthesizes an MCP response for a tool call whose
+// upstream returned no body (end_of_stream on the response headers).
+func buildEndOfStreamResponse(ctx context.Context, requestContext *requestContext) []*extProcPb.ProcessingResponse {
+	content := describeEmptyUpstreamResponse(requestContext.upstreamStatusCode)
+	errInfo := httpStatusToErrorInfo(requestContext.upstreamStatusCode)
+
+	buf, headers := buildMCPResponsePayload(ctx, requestContext.jsonrpcID, []byte(content), requestContext.toolResponseConfig, errInfo)
+	return newReplacedResponse(headers, buf)
 }
 
 func describeEmptyUpstreamResponse(statusCode int) string {
@@ -265,49 +300,20 @@ func httpStatusToErrorInfo(statusCode int) *errorInfo {
 	return &errorInfo{fmt.Sprintf("upstream returned error status code %d", statusCode)}
 }
 
-func (s *extProcServer) mcpResponseHandler(ctx context.Context, body []byte, jsonrpcID jsonrpc.ID, config *toolResponseConfig, error *errorInfo) *extProcPb.ProcessingResponse {
-	return &extProcPb.ProcessingResponse{
-		Response: &extProcPb.ProcessingResponse_ResponseBody{
-			ResponseBody: &extProcPb.BodyResponse{
-				Response: buildMCPCommonResponse(ctx, jsonrpcID, body, config, error),
-			},
-		},
-	}
-}
-
-func buildMCPCommonResponse(ctx context.Context, jsonrpcID jsonrpc.ID, body []byte, config *toolResponseConfig, error *errorInfo) *extProcPb.CommonResponse {
+func (s *extProcServer) mcpResponseHandler(ctx context.Context, body []byte, jsonrpcID jsonrpc.ID, config *toolResponseConfig, errInfo *errorInfo) streamedMutation {
 	span := trace.SpanFromContext(ctx)
-
-	buf, err := buildMCPResponse(ctx, jsonrpcID, body, config, error)
-	if err != nil {
-		span.RecordError(err)
-		span.SetAttributes(attribute.String(attrResponseMarshalError, err.Error()))
-		span.SetStatus(codes.Error, "failed to build MCP response")
-		buf = encodeJSONRPCError(jsonrpcID, jsonrpc.CodeInternalError, "Internal error")
+	span.SetAttributes(
+		attribute.Int(attrBodySize, len(body)),
+		attribute.Bool(attrResponseToolCallContextPresent, config != nil),
+		attribute.Bool(attrResponseJSONRPCIDPresent, jsonrpcID.IsValid()),
+	)
+	if jsonrpcID.IsValid() {
+		span.SetAttributes(attribute.String(attrJSONRPCID, fmt.Sprint(jsonrpcID.Raw())))
 	}
-
-	return &extProcPb.CommonResponse{
-		BodyMutation: &extProcPb.BodyMutation{
-			Mutation: &extProcPb.BodyMutation_Body{Body: buf},
-		},
-		HeaderMutation: &extProcPb.HeaderMutation{
-			SetHeaders: []*corev3.HeaderValueOption{
-				{
-					Header: &corev3.HeaderValue{
-						Key:      "content-type",
-						RawValue: []byte("application/json"),
-					},
-					AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
-				},
-				{
-					Header: &corev3.HeaderValue{
-						Key:      "content-length",
-						RawValue: []byte(strconv.Itoa(len(buf))),
-					},
-					AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
-				},
-			},
-		},
+	buf, headers := buildMCPResponsePayload(ctx, jsonrpcID, body, config, errInfo)
+	return streamedMutation{
+		headers: responseFactory.headerMutation(headers, contentHeaders),
+		body:    buf,
 	}
 }
 

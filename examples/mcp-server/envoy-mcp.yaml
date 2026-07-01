@@ -26,9 +26,22 @@ static_resources:
                           allow_headers: "*"
                           max_age: "86400"
                       routes:
+                        - name: mcp_inspector_cors_preflight
+                          match:
+                            prefix: "/mcp"
+                            headers:
+                              - name: ":method"
+                                string_match:
+                                  exact: "OPTIONS"
+                          route:
+                            cluster: prism
+                          typed_per_filter_config:
+                            envoy.filters.http.ext_proc:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
+                              disabled: true
                         - name: main
                           match:
-                            prefix: "/"
+                            prefix: "/mcp"
                           route:
                             cluster: prism
                 http_filters:
@@ -51,8 +64,10 @@ static_resources:
                       processing_mode:
                         request_header_mode: SEND
                         response_header_mode: SEND
-                        request_body_mode: BUFFERED
-                        response_body_mode: BUFFERED
+                        request_body_mode: FULL_DUPLEX_STREAMED
+                        response_body_mode: FULL_DUPLEX_STREAMED
+                        request_trailer_mode: SEND
+                        response_trailer_mode: SEND
                   - name: envoy.filters.http.router
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router

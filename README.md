@@ -72,6 +72,16 @@ To check the test coverage, execute the following command:
 make coverage-check
 ```
 
+### E2E tests
+
+To run the end-to-end suite (spins up Envoy, the processor, and a mock upstream via Docker Compose, then exercises MCP <=> REST translation), execute the following command:
+
+```sh
+make e2e
+```
+
+Requires Docker. On failure, container logs are captured in `e2e/last-run.log`.
+
 ### Fuzz tests
 
 Run server handler fuzz tests one at a time:
@@ -86,6 +96,39 @@ make fuzz-response
 
 Each command runs until stopped with `Ctrl+C` and reports any issues found.
 
+
+## DNS Rebinding Protection
+
+The processor validates the `Host`/`:authority` and `Origin` headers of every
+request. By default only loopback hostnames are accepted: `localhost`, `127.0.0.1` and
+`::1` (any port); anything else is refused with HTTP 403. This protects unauthenticated 
+localhost deployments against DNS rebinding attacks where a malicious website's DNS resolves 
+to 127.0.0.1 so the victim's browser sends same-origin requests to the local server.
+
+A missing `Host` header is rejected (fail closed). A missing `Origin` header
+is accepted (non-browser clients do not send one), but a present `Origin`
+must be a URL whose hostname is allowed.
+
+Deployments serving other domains configure them via `Config.AllowedHosts`:
+
+```go
+cfg := &mcp_proc.Config{
+    // ...
+    AllowedHosts: []string{"mcp.example.com"},
+}
+```
+
+Matching is case-insensitive and ignores ports. A non-empty list **replaces**
+the localhost default — include `"localhost"` explicitly if it should remain
+allowed.
+
+Each entry is one of:
+
+- `"*"` — match any host. This disables DNS rebinding protection, so use it only
+  on trusted networks.
+- `"*.example.com"` — match any subdomain at any depth (`foo.example.com`,
+  `a.b.example.com`) but **not** the apex `example.com`.
+- `"mcp.example.com"` — exact match.
 
 ## Security Checklist
 

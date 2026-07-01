@@ -76,10 +76,9 @@ func TestMcpRequestHandler_JSONRPCErrorCodes(t *testing.T) {
 			result := server.mcpRequestHandler(context.Background(), tt.requestBody)
 
 			require.NotNil(t, result)
-			require.NotNil(t, result.ProcRep)
+			require.NotNil(t, result.Immediate)
 
-			immediate := result.ProcRep.GetImmediateResponse()
-			require.NotNil(t, immediate, "protocol error should produce an immediate response")
+			immediate := requireImmediateResponse(t, result.Immediate)
 
 			assert.Equal(t, int32(200), int32(immediate.GetStatus().GetCode()),
 				"protocol errors should use HTTP 200 with JSON-RPC error body")

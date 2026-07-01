@@ -5,38 +5,110 @@ import (
 	"testing"
 	"time"
 
+	extProcPb "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	grpccodes "google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
-func TestRunServer_NilContext(t *testing.T) {
+func TestProcess_RecvCanceled(t *testing.T) {
+	t.Parallel()
+
+	// gRPC surfaces client cancellation as a Canceled status whose message
+	// varies with the cause; the Process loop must treat any Canceled status as
+	// a clean shutdown, not an error.
+	requests := []*extProcPb.ProcessingRequest{
+		requestHeadersMsg(false),
+	}
+	stream := &fakeProcessStream{
+		requests: requests,
+		recvErr:  status.Error(grpccodes.Canceled, "client canceled the stream"),
+	}
+	server := &extProcServer{allowedHosts: newHostAllowlist(nil)}
+	require.NoError(t, server.Process(stream))
+}
+
+func TestRunServer_InvalidArguments(t *testing.T) {
+	tests := []struct {
+		name    string
+		ctx     context.Context
+		cfg     *Config
+		wantErr string
+	}{
+		{
+			name:    "nil context",
+			ctx:     nil,
+			cfg:     &Config{SocketPath: "/tmp/test.sock", ToolRegistryConfig: &ToolRegistryConfig{}},
+			wantErr: "context must not be nil",
+		},
+		{
+			name:    "nil config",
+			ctx:     context.Background(),
+			cfg:     nil,
+			wantErr: "config must not be nil",
+		},
+		{
+			name:    "nil tool registry config",
+			ctx:     context.Background(),
+			cfg:     &Config{SocketPath: "/tmp/test.sock"},
+			wantErr: "config.ToolRegistryConfig must not be nil",
+		},
+		{
+			name:    "empty socket path",
+			ctx:     context.Background(),
+			cfg:     &Config{ToolRegistryConfig: &ToolRegistryConfig{}},
+			wantErr: "config.SocketPath must not be empty",
+		},
+		{
+			name:    "empty allowed host entry",
+			ctx:     context.Background(),
+			cfg:     &Config{SocketPath: "/tmp/test.sock", ToolRegistryConfig: &ToolRegistryConfig{}, AllowedHosts: []string{""}},
+			wantErr: `config.AllowedHosts entry "" must be a plain hostname or wildcard ("*", "*.example.com")`,
+		},
+		{
+			name:    "allowed host with scheme",
+			ctx:     context.Background(),
+			cfg:     &Config{SocketPath: "/tmp/test.sock", ToolRegistryConfig: &ToolRegistryConfig{}, AllowedHosts: []string{"http://localhost"}},
+			wantErr: `config.AllowedHosts entry "http://localhost" must be a plain hostname or wildcard ("*", "*.example.com")`,
+		},
+		{
+			name:    "allowed host with bare wildcard label",
+			ctx:     context.Background(),
+			cfg:     &Config{SocketPath: "/tmp/test.sock", ToolRegistryConfig: &ToolRegistryConfig{}, AllowedHosts: []string{"*."}},
+			wantErr: `config.AllowedHosts entry "*." must be a plain hostname or wildcard ("*", "*.example.com")`,
+		},
+		{
+			name:    "allowed host with double wildcard",
+			ctx:     context.Background(),
+			cfg:     &Config{SocketPath: "/tmp/test.sock", ToolRegistryConfig: &ToolRegistryConfig{}, AllowedHosts: []string{"*.*"}},
+			wantErr: `config.AllowedHosts entry "*.*" must be a plain hostname or wildcard ("*", "*.example.com")`,
+		},
+		{
+			name:    "allowed host with embedded wildcard",
+			ctx:     context.Background(),
+			cfg:     &Config{SocketPath: "/tmp/test.sock", ToolRegistryConfig: &ToolRegistryConfig{}, AllowedHosts: []string{"a*b.com"}},
+			wantErr: `config.AllowedHosts entry "a*b.com" must be a plain hostname or wildcard ("*", "*.example.com")`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := RunServer(tt.ctx, tt.cfg) //nolint:staticcheck // intentionally testing nil context rejection
+			require.EqualError(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestConfig_Validate_AcceptsWildcards(t *testing.T) {
+	t.Parallel()
+
 	cfg := &Config{
 		SocketPath:         "/tmp/test.sock",
 		ToolRegistryConfig: &ToolRegistryConfig{},
+		AllowedHosts:       []string{"*", "*.example.com", "host.example.com", "localhost"},
 	}
-	err := RunServer(nil, cfg) //nolint:staticcheck // intentionally testing nil context rejection
-	require.EqualError(t, err, "context must not be nil")
-}
-
-func TestRunServer_NilConfig(t *testing.T) {
-	err := RunServer(context.Background(), nil)
-	require.EqualError(t, err, "config must not be nil")
-}
-
-func TestRunServer_NilToolRegistryConfig(t *testing.T) {
-	cfg := &Config{
-		SocketPath: "/tmp/test.sock",
-	}
-	err := RunServer(context.Background(), cfg)
-	require.EqualError(t, err, "config.ToolRegistryConfig must not be nil")
-}
-
-func TestRunServer_EmptySocketPath(t *testing.T) {
-	cfg := &Config{
-		ToolRegistryConfig: &ToolRegistryConfig{},
-	}
-	err := RunServer(context.Background(), cfg)
-	require.EqualError(t, err, "config.SocketPath must not be empty")
+	require.NoError(t, cfg.validate())
 }
 
 func TestRunServer_FailsWhenNoToolsLoaded(t *testing.T) {

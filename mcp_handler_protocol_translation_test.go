@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"strings"
 	"testing"
 
@@ -14,7 +13,6 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/grpc/metadata"
 )
 
 const (
@@ -125,12 +123,8 @@ func mkAddPetTestCase(t *testing.T) petstoreOperationTranslationCase {
 			Body:      bodyExpectation{ContentType: "application/json"},
 			AssertRequestExtra: func(t *testing.T, reqResult *mcpProcResponse) {
 				t.Helper()
-				bodyResp := reqResult.ProcRep.GetRequestBody()
-				require.NotNil(t, bodyResp)
-				commonResp := bodyResp.GetResponse()
-				require.NotNil(t, commonResp)
 				var decoded map[string]any
-				require.NoError(t, json.Unmarshal(commonResp.GetBodyMutation().GetBody(), &decoded))
+				require.NoError(t, json.Unmarshal(reqResult.Reroute.body, &decoded))
 				assert.Equal(t, fixturePetName, decoded["name"])
 			},
 		},
@@ -210,9 +204,7 @@ func TestPetstoreProtocolTranslation_OperationCases(t *testing.T) {
 				Body:      bodyExpectation{Empty: true},
 				AssertRequestExtra: func(t *testing.T, reqResult *mcpProcResponse) {
 					t.Helper()
-					bodyResp := reqResult.ProcRep.GetRequestBody()
-					require.NotNil(t, bodyResp)
-					commonResp := bodyResp.GetResponse()
+					commonResp := reqResult.Reroute.headers.GetRequestHeaders().GetResponse()
 					require.NotNil(t, commonResp)
 					gotHeaders := headersFromSetHeaders(commonResp.GetHeaderMutation().GetSetHeaders())
 					assert.Equal(t, "my-secret-key", gotHeaders["api_key"])
@@ -295,12 +287,12 @@ func TestPetstoreProtocolTranslation_OperationCases(t *testing.T) {
 			requestBody := buildToolsCallRequest(t, tc.operationID, tc.requestArguments)
 			reqResult := server.mcpRequestHandler(context.Background(), requestBody)
 			require.NotNil(t, reqResult)
-			require.NotNil(t, reqResult.ProcRep)
+			require.NotNil(t, reqResult.Reroute)
 			assertRequestTranslation(t, reqResult, tc.requestExpectation)
 
 			respResult := server.mcpResponseHandler(context.Background(), tc.upstreamResponse, reqResult.Id, &toolConfig.toolResponseConfig, nil)
-			require.NotNil(t, respResult)
-			assertResponseTranslation(t, respResult, tc.upstreamResponse, tc.responseExpectation)
+			require.NotNil(t, respResult.headers)
+			assertResponseTranslation(t, frame(respResult, responseFactory, false), tc.upstreamResponse, tc.responseExpectation)
 		})
 	}
 }
@@ -356,10 +348,9 @@ func TestPetstoreProtocolTranslation_ToolExecutionErrorPaths(t *testing.T) {
 
 			result := server.mcpRequestHandler(context.Background(), tc.request)
 			require.NotNil(t, result)
-			require.NotNil(t, result.ProcRep)
+			require.NotNil(t, result.Immediate)
 
-			immediate := result.ProcRep.GetImmediateResponse()
-			require.NotNil(t, immediate, "error response should be immediate")
+			immediate := requireImmediateResponse(t, result.Immediate)
 
 			// All JSON-RPC responses use HTTP 200
 			require.NotNil(t, immediate.GetStatus())
@@ -385,121 +376,13 @@ func TestPetstoreProtocolTranslation_StructuredOutputDowngradesForInvalidJSON(t 
 
 	upstreamBody := []byte(`not-json-upstream-body`)
 	response := server.mcpResponseHandler(context.Background(), upstreamBody, mustMakeID("test-id-structured-downgrade"), &toolConfig.toolResponseConfig, nil)
-	require.NotNil(t, response)
+	require.NotNil(t, response.headers)
 
-	assertResponseTranslation(t, response, upstreamBody, responseExpectation{
+	assertResponseTranslation(t, frame(response, responseFactory, false), upstreamBody, responseExpectation{
 		ExpectContentTextEqUpstream: true,
 		IsStructured:                false,
 		IsError:                     false,
 	})
-}
-
-func TestPetstoreProtocolTranslation_ProcessResponseHeadersEOS(t *testing.T) {
-	t.Parallel()
-
-	registry, err := newToolRegistryFromConfig(&ToolRegistryConfig{
-		OpenAPISpecPattern: "testdata/petstore.openapi.yaml",
-		StructuredOutput:   true,
-	})
-	require.NoError(t, err)
-
-	server := &extProcServer{registry: registry}
-
-	requestBody := buildToolsCallRequest(t, "getPetById", map[string]any{"petId": 123})
-	stream := &fakeProcessStream{
-		ctx: context.Background(),
-		requests: []*extProcPb.ProcessingRequest{
-			{
-				Request: &extProcPb.ProcessingRequest_RequestBody{
-					RequestBody: &extProcPb.HttpBody{Body: requestBody},
-				},
-			},
-			{
-				Request: &extProcPb.ProcessingRequest_ResponseHeaders{
-					ResponseHeaders: &extProcPb.HttpHeaders{
-						EndOfStream: true,
-						Headers: &corev3.HeaderMap{Headers: []*corev3.HeaderValue{
-							{Key: ":status", RawValue: []byte("204")},
-						}},
-					},
-				},
-			},
-		},
-	}
-
-	require.NoError(t, server.Process(stream))
-	require.Len(t, stream.sentResponses, 2)
-
-	eosResponse := stream.sentResponses[1].GetResponseHeaders()
-	require.NotNil(t, eosResponse)
-	common := eosResponse.GetResponse()
-	require.NotNil(t, common)
-
-	assert.Equal(t, extProcPb.CommonResponse_CONTINUE_AND_REPLACE, common.GetStatus())
-	gotHeaders := headersFromSetHeaders(common.GetHeaderMutation().GetSetHeaders())
-	assert.Equal(t, "200", gotHeaders[":status"])
-	assert.Equal(t, "application/json", gotHeaders["content-type"])
-
-	jsonrpcResponse := decodeJSONRPCResponseBody(t, common.GetBodyMutation().GetBody())
-	result, ok := jsonrpcResponse["result"].(map[string]any)
-	require.True(t, ok)
-
-	content, ok := result["content"].([]any)
-	require.True(t, ok)
-	require.NotEmpty(t, content)
-
-	firstContent, ok := content[0].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, "API returned HTTP 204 (No Content) with no response body.", firstContent["text"])
-}
-
-func TestPetstoreProtocolTranslation_ResponseWithoutBodyMarksAPIFailuresAsToolErrors(t *testing.T) {
-	t.Parallel()
-
-	registry, err := newToolRegistryFromConfig(&ToolRegistryConfig{
-		OpenAPISpecPattern: "testdata/petstore.openapi.yaml",
-		StructuredOutput:   true,
-	})
-	require.NoError(t, err)
-
-	server := &extProcServer{registry: registry}
-
-	requestBody := buildToolsCallRequest(t, "getPetById", map[string]any{"petId": 123})
-	stream := &fakeProcessStream{
-		ctx: context.Background(),
-		requests: []*extProcPb.ProcessingRequest{
-			{
-				Request: &extProcPb.ProcessingRequest_RequestBody{
-					RequestBody: &extProcPb.HttpBody{Body: requestBody},
-				},
-			},
-			{
-				Request: &extProcPb.ProcessingRequest_ResponseHeaders{
-					ResponseHeaders: &extProcPb.HttpHeaders{
-						EndOfStream: true,
-						Headers: &corev3.HeaderMap{Headers: []*corev3.HeaderValue{
-							{Key: ":status", RawValue: []byte("500")},
-						}},
-					},
-				},
-			},
-		},
-	}
-
-	require.NoError(t, server.Process(stream))
-	require.Len(t, stream.sentResponses, 2)
-
-	eosResponse := stream.sentResponses[1].GetResponseHeaders()
-	require.NotNil(t, eosResponse)
-	common := eosResponse.GetResponse()
-	require.NotNil(t, common)
-
-	jsonrpcResponse := decodeJSONRPCResponseBody(t, common.GetBodyMutation().GetBody())
-	result, ok := jsonrpcResponse["result"].(map[string]any)
-	require.True(t, ok)
-	isError, ok := result["isError"].(bool)
-	require.True(t, ok)
-	assert.True(t, isError)
 }
 
 func TestPetstoreProtocolTranslation_ResponseBodyMarksAPIFailuresAsToolErrors(t *testing.T) {
@@ -515,39 +398,19 @@ func TestPetstoreProtocolTranslation_ResponseBodyMarksAPIFailuresAsToolErrors(t 
 	toolConfig := registry.GetConfig("getPetById")
 	require.NotNil(t, toolConfig)
 
-	upstreamBody := []byte(`{"message":"upstream failed"}`)
-	response := server.mcpResponseHandler(context.Background(), upstreamBody, mustMakeID("test-id-api-failure"), &toolConfig.toolResponseConfig, httpStatusToErrorInfo(500))
-	require.NotNil(t, response)
+	for _, upstreamStatus := range []int{500, 0} {
+		t.Run(fmt.Sprintf("status_%d", upstreamStatus), func(t *testing.T) {
+			upstreamBody := []byte(`{"message":"upstream failed"}`)
+			response := server.mcpResponseHandler(context.Background(), upstreamBody, mustMakeID("test-id-api-failure"), &toolConfig.toolResponseConfig, httpStatusToErrorInfo(upstreamStatus))
+			require.NotNil(t, response.headers)
 
-	assertResponseTranslation(t, response, upstreamBody, responseExpectation{
-		ExpectContentTextEqUpstream: true,
-		IsStructured:                false,
-		IsError:                     true,
-	})
-}
-
-func TestPetstoreProtocolTranslation_ResponseBodyMarksUnsetStatusAsToolError(t *testing.T) {
-	t.Parallel()
-
-	registry, err := newToolRegistryFromConfig(&ToolRegistryConfig{
-		OpenAPISpecPattern: "testdata/petstore.openapi.yaml",
-		StructuredOutput:   true,
-	})
-	require.NoError(t, err)
-
-	server := &extProcServer{registry: registry}
-	toolConfig := registry.GetConfig("getPetById")
-	require.NotNil(t, toolConfig)
-
-	upstreamBody := []byte(`{"message":"status missing"}`)
-	response := server.mcpResponseHandler(context.Background(), upstreamBody, mustMakeID("test-id-status-unset"), &toolConfig.toolResponseConfig, httpStatusToErrorInfo(0))
-	require.NotNil(t, response)
-
-	assertResponseTranslation(t, response, upstreamBody, responseExpectation{
-		ExpectContentTextEqUpstream: true,
-		IsStructured:                false,
-		IsError:                     true,
-	})
+			assertResponseTranslation(t, frame(response, responseFactory, false), upstreamBody, responseExpectation{
+				ExpectContentTextEqUpstream: true,
+				IsStructured:                false,
+				IsError:                     true,
+			})
+		})
+	}
 }
 
 func petFixture(id int) map[string]any {
@@ -644,10 +507,12 @@ func assertToolTranslation(t *testing.T, tool *mcp.Tool, toolConfig *toolConfig,
 func assertRequestTranslation(t *testing.T, reqResult *mcpProcResponse, expected requestExpectation) {
 	t.Helper()
 
-	bodyResp := reqResult.ProcRep.GetRequestBody()
-	require.NotNil(t, bodyResp, "tools/call should produce a request body mutation response")
+	require.NotNil(t, reqResult.Reroute, "tools/call should produce a streamed request mutation")
+	headersResp := reqResult.Reroute.headers.GetRequestHeaders()
+	require.NotNil(t, headersResp, "tools/call should produce a request headers mutation response")
+	body := reqResult.Reroute.body
 
-	commonResp := bodyResp.GetResponse()
+	commonResp := headersResp.GetResponse()
 	require.NotNil(t, commonResp)
 	require.NotNil(t, commonResp.GetHeaderMutation())
 
@@ -662,13 +527,11 @@ func assertRequestTranslation(t *testing.T, reqResult *mcpProcResponse, expected
 		assert.Equal(t, expected.Authority, gotHeaders[":authority"])
 	}
 
-	require.NotNil(t, commonResp.GetBodyMutation())
 	if expected.Body.Empty {
-		assert.Empty(t, commonResp.GetBodyMutation().GetBody(), "request body should be empty")
-		assert.Equal(t, "0", gotHeaders["content-length"])
+		assert.Empty(t, body, "request body should be empty")
 	}
 	if expected.Body.ContentType != "" {
-		assert.NotEmpty(t, commonResp.GetBodyMutation().GetBody(), "request body should not be empty")
+		assert.NotEmpty(t, body, "request body should not be empty")
 		assert.Equal(t, expected.Body.ContentType, gotHeaders["content-type"])
 	}
 
@@ -677,20 +540,21 @@ func assertRequestTranslation(t *testing.T, reqResult *mcpProcResponse, expected
 	}
 }
 
-func assertResponseTranslation(t *testing.T, respResult *extProcPb.ProcessingResponse, upstreamBody []byte, expected responseExpectation) {
+func assertResponseTranslation(t *testing.T, respResult []*extProcPb.ProcessingResponse, upstreamBody []byte, expected responseExpectation) {
 	t.Helper()
 
-	responseBody := respResult.GetResponseBody()
-	require.NotNil(t, responseBody, "mcpResponseHandler should produce response body mutation")
+	headersResp := requireResponseHeadersResponse(t, respResult).GetResponseHeaders()
+	require.NotNil(t, headersResp, "mcpResponseHandler should produce response headers mutation")
+	body := collectResponseBodyBytes(t, respResult)
 
-	commonResp := responseBody.GetResponse()
+	commonResp := headersResp.GetResponse()
 	require.NotNil(t, commonResp)
 	require.NotNil(t, commonResp.GetHeaderMutation())
 
 	gotHeaders := headersFromSetHeaders(commonResp.GetHeaderMutation().GetSetHeaders())
 	assert.Equal(t, "application/json", gotHeaders["content-type"])
 
-	jsonrpcResponse := decodeJSONRPCResponseBody(t, commonResp.GetBodyMutation().GetBody())
+	jsonrpcResponse := decodeJSONRPCResponseBody(t, body)
 	if errObj, hasErr := jsonrpcResponse["error"]; hasErr {
 		t.Fatalf("jsonrpc response contains error: %v", errObj)
 	}
@@ -729,7 +593,7 @@ func assertResponseTranslation(t *testing.T, respResult *extProcPb.ProcessingRes
 	assert.Equal(t, expected.IsError, isError, "result isError field should match expected.IsError")
 
 	if expected.AssertResponseExtra != nil {
-		expected.AssertResponseExtra(t, respResult, upstreamBody)
+		expected.AssertResponseExtra(t, requireResponseBodyResponse(t, respResult), upstreamBody)
 	}
 }
 
@@ -825,42 +689,3 @@ func assertToolExecutionError(t *testing.T, body []byte, wantMessagePrefix strin
 	assert.True(t, strings.HasPrefix(text, wantMessagePrefix),
 		"expected text to start with %q, got %q", wantMessagePrefix, text)
 }
-
-type fakeProcessStream struct {
-	extProcPb.ExternalProcessor_ProcessServer
-	ctx           context.Context
-	requests      []*extProcPb.ProcessingRequest
-	sentResponses []*extProcPb.ProcessingResponse
-	readIndex     int
-}
-
-func (s *fakeProcessStream) Recv() (*extProcPb.ProcessingRequest, error) {
-	if s.readIndex >= len(s.requests) {
-		return nil, io.EOF
-	}
-	request := s.requests[s.readIndex]
-	s.readIndex++
-	return request, nil
-}
-
-func (s *fakeProcessStream) Send(resp *extProcPb.ProcessingResponse) error {
-	s.sentResponses = append(s.sentResponses, resp)
-	return nil
-}
-
-func (s *fakeProcessStream) Context() context.Context {
-	if s.ctx == nil {
-		return context.Background()
-	}
-	return s.ctx
-}
-
-func (s *fakeProcessStream) SetHeader(metadata.MD) error { return nil }
-
-func (s *fakeProcessStream) SendHeader(metadata.MD) error { return nil }
-
-func (s *fakeProcessStream) SetTrailer(metadata.MD) {}
-
-func (s *fakeProcessStream) SendMsg(any) error { return nil }
-
-func (s *fakeProcessStream) RecvMsg(any) error { return nil }
