@@ -99,6 +99,24 @@ func TestNewToolRegistryFromOpenApiSpec_NoParameterToolHasClosedEmptyObjectInput
 	}, inputSchema)
 }
 
+func TestNewToolRegistryFromOpenApiSpec_XquikFixture(t *testing.T) {
+	registry := mkToolRegistry(t, "testdata/xquik.openapi.yaml")
+
+	assert.Equal(t, 3, registry.Len())
+
+	search := registry.GetConfig("searchTweets")
+	require.NotNil(t, search)
+	assert.Equal(t, "xquik.com", search.Endpoint.Host)
+	assert.Equal(t, "get", search.Endpoint.Method)
+	assert.Equal(t, "/api/v1/x/tweets/search", search.Endpoint.PathTemplate)
+	assert.Contains(t, search.Endpoint.Parameters, "q")
+
+	user := registry.GetConfig("getUser")
+	require.NotNil(t, user)
+	assert.Equal(t, "/api/v1/x/users/{id}", user.Endpoint.PathTemplate)
+	assert.Contains(t, user.Endpoint.Parameters, "id")
+}
+
 func assertPetSchema(t *testing.T, schema map[string]any, label string) {
 	t.Helper()
 

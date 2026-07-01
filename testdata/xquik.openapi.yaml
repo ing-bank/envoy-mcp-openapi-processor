@@ -1,0 +1,128 @@
+openapi: 3.0.3
+info:
+  title: Xquik API Fixture
+  version: 1.0.0
+servers:
+  - url: https://xquik.com
+security:
+  - apiKey: []
+  - oauthBearer: []
+paths:
+  /api/v1/x/tweets/search:
+    get:
+      operationId: searchTweets
+      summary: Search X posts
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: queryType
+          in: query
+          schema:
+            type: string
+            enum:
+              - top
+              - latest
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TweetSearchResponse"
+  /api/v1/x/users/{id}:
+    get:
+      operationId: getUser
+      summary: Get an X user profile
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: User profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
+  /api/v1/trends:
+    get:
+      operationId: getTrends
+      summary: Get regional trends
+      parameters:
+        - name: woeid
+          in: query
+          schema:
+            type: integer
+        - name: count
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+      responses:
+        "200":
+          description: Trend list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TrendsResponse"
+components:
+  securitySchemes:
+    apiKey:
+      type: apiKey
+      in: header
+      name: x-api-key
+    oauthBearer:
+      type: http
+      scheme: bearer
+  schemas:
+    TweetSearchResponse:
+      type: object
+      properties:
+        tweets:
+          type: array
+          items:
+            $ref: "#/components/schemas/Tweet"
+        nextCursor:
+          type: string
+    Tweet:
+      type: object
+      properties:
+        id:
+          type: string
+        text:
+          type: string
+        authorId:
+          type: string
+    UserProfile:
+      type: object
+      properties:
+        id:
+          type: string
+        username:
+          type: string
+        displayName:
+          type: string
+    TrendsResponse:
+      type: object
+      properties:
+        trends:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              rank:
+                type: integer
