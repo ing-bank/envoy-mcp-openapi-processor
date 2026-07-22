@@ -10,7 +10,7 @@ services:
     depends_on:
       - prism
   envoy:
-    image: envoyproxy/envoy:distroless-v1.37.2
+    image: envoyproxy/envoy:distroless-v1.39.0
     user: "10042"
     ports:
       - "127.0.0.1:10000:10000"
