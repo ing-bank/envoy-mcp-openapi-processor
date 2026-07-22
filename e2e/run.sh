@@ -183,7 +183,8 @@ case_log_scan() {
   local name="log scan: no errors/violations in envoy or processor logs"
   local pattern='protocol violation|panic|rejected|local_reply|ERROR'
   local hits
-  hits=$($COMPOSE logs --no-color envoy envoy-mcp-openapi-processor 2>&1 | grep -E "$pattern" || true)
+  hits=$($COMPOSE logs --no-color envoy envoy-mcp-openapi-processor 2>&1 \
+    | grep -E "$pattern" | grep -v 'envoy\.matching\.inputs\.local_reply' || true)
   if [ -n "$hits" ]; then
     fail "$name: found suspicious log lines:"
     echo "$hits" | head -20
