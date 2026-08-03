@@ -2,6 +2,7 @@ package envoy_mcp_openapi_processor
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -66,8 +67,8 @@ func (r *toolRegistry) Len() int {
 	return len(r.tools)
 }
 
-// Register adds a tool and its configuration to the registry.
-// Returns an error if the tool is nil or if tool name validation fails.
+// Register inserts the tool at its sorted position. A deterministic list order
+// is a 2026-07-28 SHOULD, and it also benefits legacy clients.
 func (r *toolRegistry) Register(tool *mcp.Tool, config *toolConfig) error {
 	if tool == nil {
 		return fmt.Errorf("tool cannot be nil")
@@ -78,10 +79,13 @@ func (r *toolRegistry) Register(tool *mcp.Tool, config *toolConfig) error {
 	if err := validateToolName(tool.Name); err != nil {
 		return err
 	}
-	if _, exists := r.configs[tool.Name]; exists {
+	position, registered := slices.BinarySearchFunc(r.tools, tool.Name, func(candidate *mcp.Tool, name string) int {
+		return strings.Compare(candidate.Name, name)
+	})
+	if registered {
 		return fmt.Errorf("tool '%s' already registered", tool.Name)
 	}
-	r.tools = append(r.tools, tool)
+	r.tools = slices.Insert(r.tools, position, tool)
 	r.configs[tool.Name] = config
 	return nil
 }
@@ -111,7 +115,7 @@ func (r *toolRegistry) GetConfig(name string) *toolConfig {
 	return r.configs[name]
 }
 
-// Tools returns the tools in the registry.
+// Tools returns the tools in the registry, sorted by name.
 // The returned slice should be treated as read-only. Callers must not modify
 // the slice or its contents
 func (r *toolRegistry) Tools() []*mcp.Tool {

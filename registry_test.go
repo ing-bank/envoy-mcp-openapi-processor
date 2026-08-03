@@ -27,6 +27,14 @@ func mkToolRegistryFromConfig(t *testing.T, config *ToolRegistryConfig) *toolReg
 	return registry
 }
 
+func toolNames(registry *toolRegistry) []string {
+	names := make([]string, 0, registry.Len())
+	for _, tool := range registry.Tools() {
+		names = append(names, tool.Name)
+	}
+	return names
+}
+
 func TestToolRegistry_FilterByAllowlist_FiltersTools(t *testing.T) {
 	registry := mkDefaultToolRegistry(t)
 
@@ -75,7 +83,7 @@ func TestToolRegistry_String(t *testing.T) {
 
 	result := registry.String()
 
-	assert.Equal(t, "[listUsers => GET api.example.com/users, createUser => POST api.example.com/users]", result)
+	assert.Equal(t, "[createUser => POST api.example.com/users, listUsers => GET api.example.com/users]", result)
 }
 
 func TestToolRegistry_FilterByAllowlist_EmptyAllowlistReturnsError(t *testing.T) {
@@ -137,6 +145,31 @@ func TestToolRegistry_Register_RejectsInvalidToolNames(t *testing.T) {
 			assert.Equal(t, 0, registry.Len())
 		})
 	}
+}
+
+func TestToolRegistry_Register_KeepsToolsSortedByName(t *testing.T) {
+	registry := newToolRegistry()
+
+	for _, toolName := range []string{"t3", "t2", "t1"} {
+		require.NoError(t, registry.Register(
+			&mcp.Tool{Name: toolName},
+			&toolConfig{Endpoint: endpoint{Host: "api.example.com", Method: "get", PathTemplate: "/" + toolName}},
+		))
+	}
+
+	assert.Equal(t, []string{"t1", "t2", "t3"}, toolNames(registry))
+}
+
+func TestToolRegistry_Register_RejectsDuplicateToolNames(t *testing.T) {
+	registry := newToolRegistry()
+	tool := &mcp.Tool{Name: "t1"}
+	config := &toolConfig{Endpoint: endpoint{Host: "api.example.com", Method: "get", PathTemplate: "/users"}}
+	require.NoError(t, registry.Register(tool, config))
+
+	err := registry.Register(tool, config)
+
+	assert.EqualError(t, err, "tool 't1' already registered")
+	assert.Equal(t, 1, registry.Len())
 }
 
 func TestToolRegistry_Register_AllowsSpecCompliantToolNames(t *testing.T) {
