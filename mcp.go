@@ -78,6 +78,8 @@ func (legacyEra) serves(method string) bool {
 	}
 }
 
+// encodeResult marshals the result as-is: every modern envelope field encodes as
+// absent when unset (see [resultMeta] and [listToolsResult]).
 func (legacyEra) encodeResult(result any) (json.RawMessage, error) {
 	return json.Marshal(result)
 }
@@ -101,6 +103,16 @@ type modernEra struct {
 	serverInfo ServerInfo
 }
 
+// Cache hints for the results the revision makes cacheable (changelog Minor 5).
+// Both are fixed. Five minutes bounds how long a client may keep using a
+// previous deployment's tool list, since a redeploy is the only way it changes
+// and an ext_proc filter has no channel to announce one. "private" keeps the
+// response out of shared caches it never travels through anyway.
+const (
+	listCacheTTLMillis = 300000
+	listCacheScope     = "private"
+)
+
 func (modernEra) serves(method string) bool {
 	switch method {
 	case methodToolsList, methodToolsCall:
@@ -110,27 +122,34 @@ func (modernEra) serves(method string) bool {
 	}
 }
 
-// encodeResult stamps the 2026-07-28 envelope fields — the required resultType
-// and the serverInfo _meta entry servers SHOULD add — onto the results the
-// methods in [modernEra.serves] produce, and refuses anything else.
+// encodeResult stamps the 2026-07-28 envelope fields onto the results the
+// methods in [modernEra.serves] produce: the required resultType, the serverInfo
+// _meta entry servers SHOULD add, and the cache hints on cacheable results.
 func (e modernEra) encodeResult(result any) (json.RawMessage, error) {
 	switch r := result.(type) {
 	case *callToolResult:
 		if r == nil {
 			break
 		}
-		r.Meta = e.metaWithServerInfo(r.Meta)
-		r.ResultType = resultTypeComplete
+		e.stampEnvelope(&r.resultMeta)
 		return json.Marshal(r)
-	case *mcp.ListToolsResult:
+	case *listToolsResult:
 		if r == nil {
 			break
 		}
-		r.SetMeta(e.metaWithServerInfo(r.GetMeta()))
-		r.ResultType = resultTypeComplete
+		e.stampEnvelope(&r.resultMeta)
+		// SEP-2549 makes a tool list cacheable; a tool call's result is not.
+		r.Cacheable = &mcp.Cacheable{TTLMs: listCacheTTLMillis, CacheScope: listCacheScope}
 		return json.Marshal(r)
 	}
 	return nil, fmt.Errorf("modern era cannot encode result %T", result)
+}
+
+// stampEnvelope writes the fields every modern result carries: the serverInfo
+// _meta entry (SEP-2575) and resultType (SEP-2322).
+func (e modernEra) stampEnvelope(m *resultMeta) {
+	m.Meta = e.metaWithServerInfo(m.Meta)
+	m.ResultType = resultTypeComplete
 }
 
 // metaWithServerInfo adds the serverInfo entry (SEP-2575), leaving the rest.

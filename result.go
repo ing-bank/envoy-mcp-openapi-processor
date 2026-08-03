@@ -1,10 +1,13 @@
 package envoy_mcp_openapi_processor
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
 
 // resultTypeComplete is the only result type this server produces. It answers
-// from the upstream API and never asks the client for further input. Untyped so
-// it assigns to go-sdk's unexported resultType on [mcp.ListToolsResult] too.
+// from the upstream API and never asks the client for further input.
 const resultTypeComplete = "complete"
 
 // resultMeta holds the envelope fields the 2026-07-28 revision defines on every
@@ -25,6 +28,15 @@ type callToolResult struct {
 	// the tool declares an output schema.
 	StructuredContent json.RawMessage `json:"structuredContent,omitempty"`
 	IsError           bool            `json:"isError,omitempty"`
+}
+
+// listToolsResult mirrors [mcp.ListToolsResult] because the sdk
+// embeds [mcp.Cacheable] without omitempty and cannot express "no cache hints"
+// which we need to omit when responding to pre-2026 clients.
+type listToolsResult struct {
+	resultMeta
+	*mcp.Cacheable
+	Tools []*mcp.Tool `json:"tools"`
 }
 
 // textContent is the only content kind this server emits. Every tool result is

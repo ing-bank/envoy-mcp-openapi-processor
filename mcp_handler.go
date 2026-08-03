@@ -214,7 +214,7 @@ func (s *extProcServer) mcpRequestHandler(ctx context.Context, body []byte, hdrs
 	case methodNotificationsInitialized:
 		return &mcpProcResponse{Id: req.ID, Immediate: httpStatusResponse(typev3.StatusCode_Accepted)}
 	case methodToolsList:
-		return resultResponse(span, era, req.ID, &mcp.ListToolsResult{Tools: s.registry.Tools()})
+		return resultResponse(span, era, req.ID, &listToolsResult{Tools: s.registry.Tools()})
 	case methodToolsCall:
 		return s.handleToolCall(span, era, req, hdrs.paramHeaderNames)
 	default:

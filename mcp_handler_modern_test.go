@@ -30,6 +30,8 @@ func TestModernRequests_HappyPaths(t *testing.T) {
 
 		_, result := decodeJSONRPCResult(t, immediate.GetBody())
 		assert.Equal(t, "complete", result["resultType"], "resultType")
+		assert.Equal(t, float64(listCacheTTLMillis), result["ttlMs"], "ttlMs")
+		assert.Equal(t, listCacheScope, result["cacheScope"], "cacheScope")
 		assertServerInfoMeta(t, result, "test-server", "1.2.3")
 
 		tools, ok := result["tools"].([]any)
@@ -187,6 +189,8 @@ func TestModernRequests_PreCutoverMetaVersionIsIgnored(t *testing.T) {
 		_, result := decodeJSONRPCResult(t, immediate.GetBody())
 		assert.NotContains(t, result, "resultType", "an ignored declaration must not shape the result")
 		assert.NotContains(t, result, "_meta")
+		assert.NotContains(t, result, "ttlMs", "legacy result should not carry cache hints")
+		assert.NotContains(t, result, "cacheScope", "legacy result should not carry cache hints")
 	})
 
 	t.Run("tools/call reroutes on the legacy era", func(t *testing.T) {

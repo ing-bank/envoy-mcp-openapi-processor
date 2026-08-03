@@ -34,6 +34,13 @@ disjoint entry points, so every request selects one unambiguously:
   and mismatches are refused with HTTP 400 and JSON-RPC error `-32020`. Results carry `resultType` and the
   serverInfo `_meta` entry, and an unknown method answers HTTP 404 rather than the legacy 200.
 
+### Tool list caching
+
+Modern `tools/list` results carry fixed cache hints: `ttlMs: 300000` (five minutes) and `cacheScope: "private"`.
+The tool list changes only on redeploy, and an `ext_proc` filter cannot push `notifications/tools/list_changed`,
+so the TTL is what brings a client back. Five minutes bounds how long a client may keep using a retired list.
+Re-fetching is cheap, since the list is served from memory and never reaches the upstream API.
+
 ## OpenTelemetry
 
 To enable export of logs and traces to an OpenTelemetry collector, use one of the options below. If neither is used, the server runs with a no-op tracer provider and a no-op logger.

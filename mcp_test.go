@@ -157,12 +157,13 @@ func TestProtocolEraEncodeResult(t *testing.T) {
 	tests := []struct {
 		name      string
 		newResult func() any
+		cacheable bool
 	}{
 		{name: "tools/call", newResult: func() any {
 			return &callToolResult{Content: newTextContent("hi")}
 		}},
-		{name: "tools/list", newResult: func() any {
-			return &mcp.ListToolsResult{Tools: []*mcp.Tool{{Name: "tool"}}}
+		{name: "tools/list", cacheable: true, newResult: func() any {
+			return &listToolsResult{Tools: []*mcp.Tool{{Name: "tool"}}}
 		}},
 	}
 
@@ -174,6 +175,10 @@ func TestProtocolEraEncodeResult(t *testing.T) {
 			require.NoError(t, json.Unmarshal(legacyJSON, &legacyObj))
 			assert.NotContains(t, legacyObj, "resultType")
 			assert.NotContains(t, legacyObj, "_meta")
+			// The hints postdate this era, and a zero ttlMs would mean
+			// "immediately stale" rather than "no hint given".
+			assert.NotContains(t, legacyObj, "ttlMs")
+			assert.NotContains(t, legacyObj, "cacheScope")
 
 			era := modernEra{serverInfo: ServerInfo{Name: "srv", Version: "1.2.3"}}
 			modernJSON, err := era.encodeResult(tt.newResult())
@@ -182,6 +187,14 @@ func TestProtocolEraEncodeResult(t *testing.T) {
 			require.NoError(t, json.Unmarshal(modernJSON, &modernObj))
 			assert.Equal(t, "complete", modernObj["resultType"])
 			assertServerInfoMeta(t, modernObj, "srv", "1.2.3")
+
+			if tt.cacheable {
+				assert.Equal(t, float64(listCacheTTLMillis), modernObj["ttlMs"])
+				assert.Equal(t, listCacheScope, modernObj["cacheScope"])
+			} else {
+				assert.NotContains(t, modernObj, "ttlMs")
+				assert.NotContains(t, modernObj, "cacheScope")
+			}
 		})
 	}
 }
@@ -217,7 +230,7 @@ func TestModernEraEncodeResultRefusesUnstampable(t *testing.T) {
 	}{
 		{name: "untyped nil", result: nil},
 		{name: "nil tools/call result", result: (*callToolResult)(nil)},
-		{name: "nil tools/list result", result: (*mcp.ListToolsResult)(nil)},
+		{name: "nil tools/list result", result: (*listToolsResult)(nil)},
 		// initialize is legacy-only, so its result never reaches this era.
 		{name: "result of a method the era does not serve", result: &mcp.InitializeResult{}},
 	}
@@ -252,6 +265,23 @@ func TestCallToolResultDecodesAsSDKResult(t *testing.T) {
 	assert.True(t, decoded.IsError)
 	// Decoded through any, so the count arrives as a float64.
 	assert.Equal(t, map[string]any{"count": float64(42)}, decoded.StructuredContent)
+	assertServerInfoMeta(t, map[string]any{"_meta": map[string]any(decoded.GetMeta())}, "srv", "1.2.3")
+}
+
+// TestListToolsResultDecodesAsSDKResult is the tools/list counterpart of
+// [TestCallToolResultDecodesAsSDKResult], cache hints included.
+func TestListToolsResultDecodesAsSDKResult(t *testing.T) {
+	era := modernEra{serverInfo: ServerInfo{Name: "srv", Version: "1.2.3"}}
+	encoded, err := era.encodeResult(&listToolsResult{Tools: []*mcp.Tool{{Name: "tool"}}})
+	require.NoError(t, err)
+
+	var decoded mcp.ListToolsResult
+	require.NoError(t, json.Unmarshal(encoded, &decoded))
+
+	require.Len(t, decoded.Tools, 1)
+	assert.Equal(t, "tool", decoded.Tools[0].Name)
+	assert.Equal(t, listCacheTTLMillis, decoded.GetTTLMs())
+	assert.Equal(t, listCacheScope, decoded.GetCacheScope())
 	assertServerInfoMeta(t, map[string]any{"_meta": map[string]any(decoded.GetMeta())}, "srv", "1.2.3")
 }
 

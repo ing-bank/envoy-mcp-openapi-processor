@@ -132,6 +132,9 @@ case_tools_list() {
   local name="tools/list -> non-empty tool list"
   post "$name" 200 '{"jsonrpc":"2.0","id":3,"method":"tools/list"}' || return 0
   assert_jq "$name" '.id == 3 and (.result.tools | length > 0)' || return 0
+  # cache hints are a 2026-07-28 field: pre-2026 clients must not see them.
+  assert_jq "$name" '.result | has("ttlMs") | not' || return 0
+  assert_jq "$name" '.result | has("cacheScope") | not' || return 0
   pass "$name"
 }
 
@@ -185,6 +188,8 @@ case_modern_tools_list() {
   post "$name" 200 "{\"jsonrpc\":\"2.0\",\"id\":21,\"method\":\"tools/list\",\"params\":{$MODERN_META}}" \
     -H 'MCP-Protocol-Version: 2026-07-28' -H 'Mcp-Method: tools/list' || return 0
   assert_jq "$name" '.id == 21 and .result.resultType == "complete" and (.result.tools | length > 0)' || return 0
+  # the example server configures neither hint, so these are the defaults.
+  assert_jq "$name" '.result.ttlMs == 300000 and .result.cacheScope == "private"' || return 0
   assert_jq "$name" '.result._meta["io.modelcontextprotocol/serverInfo"] != null' || return 0
   pass "$name"
 }
