@@ -183,6 +183,18 @@ case_malformed_json() {
 
 MODERN_META='"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}'
 
+# server/discover is the modern replacement for the initialize handshake.
+case_modern_discover() {
+  local name="modern server/discover -> complete result with cache hints"
+  post "$name" 200 "{\"jsonrpc\":\"2.0\",\"id\":20,\"method\":\"server/discover\",\"params\":{$MODERN_META}}" \
+    -H 'MCP-Protocol-Version: 2026-07-28' -H 'Mcp-Method: server/discover' || return 0
+  assert_jq "$name" '.id == 20 and .result.resultType == "complete"' || return 0
+  assert_jq "$name" '.result.supportedVersions[0] == "2026-07-28"' || return 0
+  assert_jq "$name" '.result.ttlMs == 300000 and .result.cacheScope == "private"' || return 0
+  assert_jq "$name" '.result.capabilities.tools != null' || return 0
+  pass "$name"
+}
+
 case_modern_tools_list() {
   local name="modern tools/list -> shaped result"
   post "$name" 200 "{\"jsonrpc\":\"2.0\",\"id\":21,\"method\":\"tools/list\",\"params\":{$MODERN_META}}" \
@@ -389,6 +401,7 @@ case_empty_upstream_body
 case_rebinding_origin
 case_allowed_origin
 case_malformed_json
+case_modern_discover
 case_modern_tools_list
 case_modern_tool_call
 case_modern_unsupported_version

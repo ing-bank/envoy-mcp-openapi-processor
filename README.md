@@ -28,18 +28,20 @@ disjoint entry points, so every request selects one unambiguously:
 - **Legacy era (`2025-06-18`, `2025-11-25`)**: the client starts with the `initialize` handshake and declares no
   version on subsequent requests. Version negotiation never yields a modern version, so a client that asks for
   one over the handshake is answered with a version it can actually use statefully.
-- **Modern era (`2026-07-28`)**: there is no handshake. Every request carries its protocol version in
-  `params._meta` (`io.modelcontextprotocol/protocolVersion`) and mirrors it in the `MCP-Protocol-Version` header,
-  alongside `Mcp-Method` (and `Mcp-Name` for `tools/call`). Those headers are validated against the JSON-RPC body
-  and mismatches are refused with HTTP 400 and JSON-RPC error `-32020`. Results carry `resultType` and the
+- **Modern era (`2026-07-28`)**: there is no handshake. The mandatory `server/discover` RPC replaces
+  `initialize`, and every request carries its protocol version in `params._meta`
+  (`io.modelcontextprotocol/protocolVersion`) and mirrors it in the `MCP-Protocol-Version` header, alongside
+  `Mcp-Method` (and `Mcp-Name` for `tools/call`). Those headers are validated against the JSON-RPC body and
+  mismatches are refused with HTTP 400 and JSON-RPC error `-32020`. Results carry `resultType` and the
   serverInfo `_meta` entry, and an unknown method answers HTTP 404 rather than the legacy 200.
 
-### Tool list caching
+### Result caching
 
-Modern `tools/list` results carry fixed cache hints: `ttlMs: 300000` (five minutes) and `cacheScope: "private"`.
-The tool list changes only on redeploy, and an `ext_proc` filter cannot push `notifications/tools/list_changed`,
-so the TTL is what brings a client back. Five minutes bounds how long a client may keep using a retired list.
-Re-fetching is cheap, since the list is served from memory and never reaches the upstream API.
+Modern `server/discover` and `tools/list` results carry fixed cache hints: `ttlMs: 300000` (five minutes) and
+`cacheScope: "private"`. The tool list changes only on redeploy, and an `ext_proc` filter cannot push
+`notifications/tools/list_changed`, so the TTL is what brings a client back. Five minutes bounds how long a
+client may keep using a retired list. Re-fetching is cheap, since both results are served from memory and never
+reach the upstream API.
 
 ## OpenTelemetry
 

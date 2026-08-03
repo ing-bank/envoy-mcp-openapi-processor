@@ -30,8 +30,8 @@ func TestModernRequests_HappyPaths(t *testing.T) {
 
 		_, result := decodeJSONRPCResult(t, immediate.GetBody())
 		assert.Equal(t, "complete", result["resultType"], "resultType")
-		assert.Equal(t, float64(listCacheTTLMillis), result["ttlMs"], "ttlMs")
-		assert.Equal(t, listCacheScope, result["cacheScope"], "cacheScope")
+		assert.Equal(t, float64(cacheTTLMillis), result["ttlMs"], "ttlMs")
+		assert.Equal(t, cacheScope, result["cacheScope"], "cacheScope")
 		assertServerInfoMeta(t, result, "test-server", "1.2.3")
 
 		tools, ok := result["tools"].([]any)

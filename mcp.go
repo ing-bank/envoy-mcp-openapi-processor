@@ -103,19 +103,19 @@ type modernEra struct {
 	serverInfo ServerInfo
 }
 
-// Cache hints for the results the revision makes cacheable (changelog Minor 5).
-// Both are fixed. Five minutes bounds how long a client may keep using a
-// previous deployment's tool list, since a redeploy is the only way it changes
-// and an ext_proc filter has no channel to announce one. "private" keeps the
-// response out of shared caches it never travels through anyway.
+// Cache hints for the results the revision makes cacheable (changelog Minor 5),
+// server/discover and tools/list. Both are fixed. Five minutes bounds how long a
+// client may keep using a previous deployment's answers, since a redeploy is the
+// only way they change and an ext_proc filter has no channel to announce one.
+// "private" keeps them out of shared caches they never travel through anyway.
 const (
-	listCacheTTLMillis = 300000
-	listCacheScope     = "private"
+	cacheTTLMillis = 300000
+	cacheScope     = "private"
 )
 
 func (modernEra) serves(method string) bool {
 	switch method {
-	case methodToolsList, methodToolsCall:
+	case methodDiscover, methodToolsList, methodToolsCall:
 		return true
 	default:
 		return false
@@ -139,7 +139,17 @@ func (e modernEra) encodeResult(result any) (json.RawMessage, error) {
 		}
 		e.stampEnvelope(&r.resultMeta)
 		// SEP-2549 makes a tool list cacheable; a tool call's result is not.
-		r.Cacheable = &mcp.Cacheable{TTLMs: listCacheTTLMillis, CacheScope: listCacheScope}
+		r.Cacheable = &mcp.Cacheable{TTLMs: cacheTTLMillis, CacheScope: cacheScope}
+		return json.Marshal(r)
+	case *mcp.DiscoverResult:
+		// Keeps the sdk's type. No legacy client reaches server/discover, so the
+		// fields the sdk always marshals are the ones we want.
+		if r == nil {
+			break
+		}
+		r.SetMeta(e.metaWithServerInfo(r.GetMeta()))
+		r.ResultType = resultTypeComplete
+		r.Cacheable = mcp.Cacheable{TTLMs: cacheTTLMillis, CacheScope: cacheScope}
 		return json.Marshal(r)
 	}
 	return nil, fmt.Errorf("modern era cannot encode result %T", result)

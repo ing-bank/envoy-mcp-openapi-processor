@@ -33,6 +33,7 @@ func FuzzMcpRequestHandler(f *testing.F) {
 	f.Add([]byte(`{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"nonExistentTool","arguments":{}}}`))
 	f.Add([]byte(`{"jsonrpc":"2.0","id":9,"method":"unknown/method","params":{}}`))
 	// Modern (2026-07-28) requests carrying the protocol version in _meta
+	f.Add([]byte(`{"jsonrpc":"2.0","id":10,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}`))
 	f.Add([]byte(`{"jsonrpc":"2.0","id":11,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}`))
 	f.Add([]byte(`{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"getPetById","arguments":{"petId":"42"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}`))
 	f.Add([]byte(`{"jsonrpc":"2.0","id":13,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2099-01-01"}}}`))

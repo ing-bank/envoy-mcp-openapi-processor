@@ -54,6 +54,7 @@ const (
 	methodToolsList                = "tools/list"
 	methodToolsCall                = "tools/call"
 	methodNotificationsInitialized = "notifications/initialized"
+	methodDiscover                 = "server/discover"
 )
 
 type mcpProcResponse struct {
@@ -213,6 +214,8 @@ func (s *extProcServer) mcpRequestHandler(ctx context.Context, body []byte, hdrs
 		return s.handleInitialize(span, era, req)
 	case methodNotificationsInitialized:
 		return &mcpProcResponse{Id: req.ID, Immediate: httpStatusResponse(typev3.StatusCode_Accepted)}
+	case methodDiscover:
+		return s.handleDiscover(span, era, req)
 	case methodToolsList:
 		return resultResponse(span, era, req.ID, &listToolsResult{Tools: s.registry.Tools()})
 	case methodToolsCall:
@@ -227,6 +230,24 @@ func protocolVersionLabel(version string) string {
 		return version
 	}
 	return "unsupported"
+}
+
+// handleDiscover answers the modern replacement for the initialize handshake.
+// The envelope around the payload is the era's to stamp (see
+// [modernEra.encodeResult]).
+func (s *extProcServer) handleDiscover(span trace.Span, era protocolEra, req *jsonrpc.Request) *mcpProcResponse {
+	return resultResponse(span, era, req.ID, &mcp.DiscoverResult{
+		SupportedVersions: supportedProtocolVersions,
+		Capabilities:      serverCapabilities(),
+		Instructions:      s.serverInfo.Instructions,
+	})
+}
+
+// serverCapabilities advertises tools only, since an OpenAPI document has
+// nothing to project onto resources or prompts. Both discovery answers use it,
+// and each gets a fresh value because the caller owns it.
+func serverCapabilities() *mcp.ServerCapabilities {
+	return &mcp.ServerCapabilities{Tools: &mcp.ToolCapabilities{}}
 }
 
 // mcpMethodLabel returns the method itself for any method some era serves and
@@ -252,9 +273,7 @@ func (s *extProcServer) handleInitialize(span trace.Span, era protocolEra, req *
 			Name:    s.serverInfo.Name,
 			Version: s.serverInfo.Version,
 		},
-		Capabilities: &mcp.ServerCapabilities{
-			Tools: &mcp.ToolCapabilities{},
-		},
+		Capabilities: serverCapabilities(),
 		Instructions: s.serverInfo.Instructions,
 	})
 }

@@ -48,6 +48,16 @@ func TestMcpRequestHandler_Tracing(t *testing.T) {
 			wantStatusCode: codes.Unset,
 			wantErrorEvent: false,
 		},
+		{
+			name:           "server/discover",
+			requestBody:    `{"jsonrpc":"2.0","id":4,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}`,
+			headers:        mcpRequestHeaders{protocolVersion: v20260728, method: methodDiscover},
+			wantNilResp:    false,
+			wantMethod:     "server/discover",
+			wantMCPMethod:  "server/discover",
+			wantStatusCode: codes.Unset,
+			wantErrorEvent: false,
+		},
 		// json-rpc errors
 		{
 			name:                  "parse error invalid json",
