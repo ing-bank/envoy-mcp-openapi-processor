@@ -146,6 +146,35 @@ func TestMcpRequestHandler_Tracing(t *testing.T) {
 	}
 }
 
+func TestMcpRequestHandler_ProtocolVersionAttributeIsBounded(t *testing.T) {
+	tests := []struct {
+		name     string
+		declared string
+		want     string
+	}{
+		{name: "supported version recorded verbatim", declared: v20260728, want: v20260728},
+		{name: "unsupported version bucketed", declared: "2026-07-29", want: "unsupported"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tracer, spanRecorder := setupTestTracer()
+			server := newTestServer(t, "testdata/petstore.openapi.yaml")
+			spanName := "test_" + tt.name
+			ctx, rootSpan := tracer.Start(context.Background(), spanName)
+
+			body := fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":%q}}}`, tt.declared)
+
+			server.mcpRequestHandler(ctx, []byte(body))
+			rootSpan.End()
+
+			testSpan, found := findSpanByName(spanRecorder.Ended(), spanName)
+			require.True(t, found, "span '%s' not found", spanName)
+			assert.Equal(t, tt.want, getSpanAttribute(testSpan, attrMCPProtocolVersion), "mcp.protocol_version")
+		})
+	}
+}
+
 func TestMcpResponseHandler_Tracing(t *testing.T) {
 	tests := []struct {
 		name                string
@@ -189,23 +218,23 @@ func TestMcpResponseHandler_Tracing(t *testing.T) {
 			jsonrpcID:           mustMakeID("test-id-004"),
 			IsError:             true,
 			wantStatusCode:      codes.Unset,
-			wantToolErrorReason: `test reason`,
+			wantToolErrorReason: `upstream returned error status code 404`,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tracer, spanRecorder := setupTestTracer()
-			server := newTestServer(t, "testdata/petstore.openapi.yaml")
 
 			spanName := "test_" + tt.name
 			ctx, rootSpan := tracer.Start(context.Background(), spanName)
 
-			var errInfo *errorInfo
+			upstreamStatusCode := 200
 			if tt.IsError {
-				errInfo = &errorInfo{"test reason"}
+				upstreamStatusCode = 404
 			}
-			resp := server.mcpResponseHandler(ctx, []byte(tt.responseBody), tt.jsonrpcID, &toolResponseConfig{}, errInfo)
+			reqCtx := &requestContext{jsonrpcID: tt.jsonrpcID, toolResponseConfig: &toolResponseConfig{}, upstreamStatusCode: upstreamStatusCode}
+			resp := mcpResponseHandler(ctx, []byte(tt.responseBody), reqCtx)
 			assert.NotNil(t, resp.headers, "Expected non-nil response")
 
 			rootSpan.End()
@@ -258,11 +287,10 @@ func TestMcpResponseHandler_ErrorTracing(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tracer, spanRecorder := setupTestTracer()
-			server := newTestServer(t, "testdata/petstore.openapi.yaml")
 
 			spanName := "test_" + tt.name
 			ctx, span := tracer.Start(context.Background(), spanName)
-			resp := server.mcpResponseHandler(ctx, []byte(`{"status":"ok"}`), tt.jsonrpcID, tt.config, nil)
+			resp := mcpResponseHandler(ctx, []byte(`{"status":"ok"}`), &requestContext{jsonrpcID: tt.jsonrpcID, toolResponseConfig: tt.config, upstreamStatusCode: 200})
 			span.End()
 
 			require.NotNil(t, resp.headers)

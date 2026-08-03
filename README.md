@@ -20,6 +20,18 @@ go get github.com/ing-bank/envoy-mcp-openapi-processor
 See [`examples/mcp-server`](examples/mcp-server) for a complete working example including Envoy proxy configured to use the
 `envoy-mcp-openapi-processor` server.
 
+## Supported MCP Protocol Versions
+
+The processor is a dual-era MCP server supporting `2025-06-18`, `2025-11-25` and `2026-07-28`. The two eras have
+disjoint entry points, so every request selects one unambiguously:
+
+- **Legacy era (`2025-06-18`, `2025-11-25`)**: the client starts with the `initialize` handshake and declares no
+  version on subsequent requests. Version negotiation never yields a modern version, so a client that asks for
+  one over the handshake is answered with a version it can actually use statefully.
+- **Modern era (`2026-07-28`)**: there is no handshake, and every request carries its protocol version in
+  `params._meta` (`io.modelcontextprotocol/protocolVersion`). Results carry `resultType` and the serverInfo
+  `_meta` entry, and an unknown method answers HTTP 404 rather than the legacy 200.
+
 ## OpenTelemetry
 
 To enable export of logs and traces to an OpenTelemetry collector, use one of the options below. If neither is used, the server runs with a no-op tracer provider and a no-op logger.

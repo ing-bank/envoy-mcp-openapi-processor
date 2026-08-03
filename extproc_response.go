@@ -87,10 +87,14 @@ func rerouteWithBodyMutation(host string, method string, path string, body []byt
 }
 
 func newImmediateBodyResponse(body []byte) []*extProcPb.ProcessingResponse {
+	return newImmediateBodyResponseWithStatus(body, typev3.StatusCode_OK)
+}
+
+func newImmediateBodyResponseWithStatus(body []byte, status typev3.StatusCode) []*extProcPb.ProcessingResponse {
 	return immediateResponse(&extProcPb.ImmediateResponse{
 		Body: body,
 		Status: &typev3.HttpStatus{
-			Code: typev3.StatusCode_OK,
+			Code: status,
 		},
 		Headers: &extProcPb.HeaderMutation{
 			SetHeaders: appendHeader(nil, "content-type", "application/json"),

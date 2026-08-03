@@ -83,20 +83,15 @@ func TestMcpRequestHandler_JSONRPCErrorCodes(t *testing.T) {
 			assert.Equal(t, int32(200), int32(immediate.GetStatus().GetCode()),
 				"protocol errors should use HTTP 200 with JSON-RPC error body")
 
-			assertJSONRPCErrorBody(t, immediate.GetBody(), tt.wantCode)
-
-			var decoded map[string]any
-			require.NoError(t, json.Unmarshal(immediate.GetBody(), &decoded))
-			errObj := decoded["error"].(map[string]any)
-			actualMsg := errObj["message"].(string)
+			errObj := assertJSONRPCErrorBody(t, immediate.GetBody(), tt.wantCode)
 			if tt.wantMessage != nil {
-				assert.Regexp(t, tt.wantMessage, actualMsg)
+				assert.Regexp(t, tt.wantMessage, errObj["message"])
 			}
 		})
 	}
 }
 
-func assertJSONRPCErrorBody(t *testing.T, body []byte, wantCode int64) {
+func assertJSONRPCErrorBody(t *testing.T, body []byte, wantCode int64) map[string]any {
 	t.Helper()
 
 	var decoded map[string]any
@@ -114,4 +109,6 @@ func assertJSONRPCErrorBody(t *testing.T, body []byte, wantCode int64) {
 
 	_, hasMsg := errObj["message"].(string)
 	assert.True(t, hasMsg, "'error.message' should be a string")
+
+	return errObj
 }

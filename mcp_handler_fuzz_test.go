@@ -32,6 +32,10 @@ func FuzzMcpRequestHandler(f *testing.F) {
 	f.Add([]byte(`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"updatePet","arguments":{"body":{"id":1,"name":"kitty"}}}}`))
 	f.Add([]byte(`{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"nonExistentTool","arguments":{}}}`))
 	f.Add([]byte(`{"jsonrpc":"2.0","id":9,"method":"unknown/method","params":{}}`))
+	// Modern (2026-07-28) requests carrying the protocol version in _meta
+	f.Add([]byte(`{"jsonrpc":"2.0","id":11,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}`))
+	f.Add([]byte(`{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"getPetById","arguments":{"petId":"42"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}`))
+	f.Add([]byte(`{"jsonrpc":"2.0","id":13,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2099-01-01"}}}`))
 
 	// Seed corpus — malformed / edge-case inputs
 	f.Add([]byte(``))
@@ -83,12 +87,13 @@ func FuzzMcpResponseHandler(f *testing.F) {
 	f.Add([]byte("\x00\xff"), "10")
 	f.Add([]byte(`{"deeply":{"nested":{"object":{"value":true}}}}`), "11")
 
-	server := newFuzzServer(f)
-
+	// No server needed. The response phase is driven by the era and tool config
+	// on the requestContext.
 	f.Fuzz(func(t *testing.T, body []byte, jsonrpcIDStr string) {
 		ctx := context.Background()
 		jsonrpcID, _ := jsonrpc.MakeID(jsonrpcIDStr)
-		// Must not panic regardless of input
-		server.mcpResponseHandler(ctx, body, jsonrpcID, &toolResponseConfig{}, nil)
+		// Must not panic regardless of input, in both eras
+		mcpResponseHandler(ctx, body, &requestContext{jsonrpcID: jsonrpcID, toolResponseConfig: &toolResponseConfig{}, upstreamStatusCode: 200})
+		mcpResponseHandler(ctx, body, &requestContext{jsonrpcID: jsonrpcID, toolResponseConfig: &toolResponseConfig{}, upstreamStatusCode: 200, era: modernEra{}})
 	})
 }
