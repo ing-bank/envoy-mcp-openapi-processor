@@ -115,7 +115,7 @@ func (st *stateAwaitingRequestHeaders) handle(ctx context.Context, strm *stream,
 			return &stateAwaitingRequestHeaders{}, newImmediateBodyResponse(encodeJSONRPCError(jsonrpc.ID{}, jsonrpc.CodeInvalidRequest, msg)), nil
 		}
 		strm.beginBuffering()
-		return &stateBufferingRequest{}, nil, nil
+		return &stateBufferingRequest{mcpHeaders: captureMCPRequestHeaders(hdr.RequestHeaders.GetHeaders())}, nil, nil
 	}
 
 	return protocolViolation(req, "RequestHeaders")
@@ -146,7 +146,11 @@ func (st *stateDrainingRequest) handle(ctx context.Context, strm *stream, req *e
 }
 
 // stateBufferingRequest receives RequestBody chunks until EndOfStream.
-type stateBufferingRequest struct{}
+type stateBufferingRequest struct {
+	// mcpHeaders are the MCP Streamable HTTP headers captured at the
+	// request-headers phase, validated against the body once it is buffered.
+	mcpHeaders mcpRequestHeaders
+}
 
 func (st *stateBufferingRequest) handle(ctx context.Context, strm *stream, req *extProcPb.ProcessingRequest) (streamState, []*extProcPb.ProcessingResponse, error) {
 	switch value := req.Request.(type) {
@@ -173,7 +177,7 @@ func (st *stateBufferingRequest) finalize(ctx context.Context, strm *stream, has
 	)
 	defer span.End()
 
-	handlerResult := strm.server.mcpRequestHandler(ctx, strm.buf)
+	handlerResult := strm.server.mcpRequestHandler(ctx, strm.buf, st.mcpHeaders)
 
 	reqCtx := requestContext{
 		jsonrpcID:          handlerResult.Id,

@@ -22,8 +22,9 @@ func TestModernRequests_HappyPaths(t *testing.T) {
 		server.serverInfo = ServerInfo{Name: "test-server", Version: "1.2.3"}
 
 		requestBody := []byte(`{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{` + modernMeta + `}}`)
+		headers := mcpRequestHeaders{protocolVersion: v20260728, method: methodToolsList}
 
-		response := server.mcpRequestHandler(context.Background(), requestBody)
+		response := server.mcpRequestHandler(context.Background(), requestBody, headers)
 		immediate := requireImmediateResponse(t, response.Immediate)
 		assert.Equal(t, typev3.StatusCode_OK, immediate.GetStatus().GetCode())
 
@@ -36,24 +37,13 @@ func TestModernRequests_HappyPaths(t *testing.T) {
 		require.NotEmpty(t, tools)
 	})
 
-	t.Run("tools/call reroutes and records the resolved era", func(t *testing.T) {
-		t.Parallel()
-		server := newTestServer(t, "testdata/petstore.openapi.yaml")
-
-		requestBody := []byte(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"getPetById","arguments":{"petId":1},` + modernMeta + `}}`)
-
-		response := server.mcpRequestHandler(context.Background(), requestBody)
-		require.NotNil(t, response.Reroute, "modern tools/call should reroute upstream")
-		assert.IsType(t, modernEra{}, response.Era)
-	})
-
 	t.Run("initialize never negotiates a modern version", func(t *testing.T) {
 		t.Parallel()
 		server := newTestServer(t, "testdata/petstore.openapi.yaml")
 
 		requestBody := []byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},` + modernMeta + `}}`)
 
-		response := server.mcpRequestHandler(context.Background(), requestBody)
+		response := server.mcpRequestHandler(context.Background(), requestBody, mcpRequestHeaders{})
 		immediate := requireImmediateResponse(t, response.Immediate)
 
 		_, result := decodeJSONRPCResult(t, immediate.GetBody())
@@ -65,23 +55,95 @@ func TestModernRequests_HappyPaths(t *testing.T) {
 func TestModernRequests_ErrorPaths(t *testing.T) {
 	t.Parallel()
 
+	toolsCallBody := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"getPetById","arguments":{"petId":1},` + modernMeta + `}}`
+
 	tests := []struct {
 		name           string
 		requestBody    string
+		headers        mcpRequestHeaders
 		wantHTTPStatus typev3.StatusCode
 		wantCode       int64
 		wantMessage    string
 	}{
 		{
+			name:           "missing MCP-Protocol-Version header",
+			requestBody:    `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{` + modernMeta + `}}`,
+			headers:        mcpRequestHeaders{method: methodToolsList},
+			wantHTTPStatus: typev3.StatusCode_BadRequest,
+			wantCode:       mcp.CodeHeaderMismatch,
+			wantMessage:    "missing required MCP-Protocol-Version header",
+		},
+		{
+			name:           "modern header without body _meta",
+			requestBody:    `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`,
+			headers:        mcpRequestHeaders{protocolVersion: v20260728, method: methodToolsList},
+			wantHTTPStatus: typev3.StatusCode_BadRequest,
+			wantCode:       mcp.CodeHeaderMismatch,
+		},
+		{
+			name:           "protocol version mismatch",
+			requestBody:    `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{` + modernMeta + `}}`,
+			headers:        mcpRequestHeaders{protocolVersion: "2027-01-01", method: methodToolsList},
+			wantHTTPStatus: typev3.StatusCode_BadRequest,
+			wantCode:       mcp.CodeHeaderMismatch,
+		},
+		{
+			name:           "missing Mcp-Method header",
+			requestBody:    `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{` + modernMeta + `}}`,
+			headers:        mcpRequestHeaders{protocolVersion: v20260728},
+			wantHTTPStatus: typev3.StatusCode_BadRequest,
+			wantCode:       mcp.CodeHeaderMismatch,
+			wantMessage:    "missing required Mcp-Method header",
+		},
+		{
+			name:           "Mcp-Method mismatch",
+			requestBody:    `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{` + modernMeta + `}}`,
+			headers:        mcpRequestHeaders{protocolVersion: v20260728, method: methodToolsCall},
+			wantHTTPStatus: typev3.StatusCode_BadRequest,
+			wantCode:       mcp.CodeHeaderMismatch,
+		},
+		{
+			name:           "missing Mcp-Name header for tools/call",
+			requestBody:    toolsCallBody,
+			headers:        mcpRequestHeaders{protocolVersion: v20260728, method: methodToolsCall},
+			wantHTTPStatus: typev3.StatusCode_BadRequest,
+			wantCode:       mcp.CodeHeaderMismatch,
+		},
+		{
+			name:           "Mcp-Name mismatch",
+			requestBody:    toolsCallBody,
+			headers:        mcpRequestHeaders{protocolVersion: v20260728, method: methodToolsCall, name: "otherTool"},
+			wantHTTPStatus: typev3.StatusCode_BadRequest,
+			wantCode:       mcp.CodeHeaderMismatch,
+		},
+		{
+			name:        "Mcp-Name mismatch reports the decoded value",
+			requestBody: toolsCallBody,
+			// "otherTool" wrapped in the =?base64?...?= sentinel
+			headers:        mcpRequestHeaders{protocolVersion: v20260728, method: methodToolsCall, name: "=?base64?b3RoZXJUb29s?="},
+			wantHTTPStatus: typev3.StatusCode_BadRequest,
+			wantCode:       mcp.CodeHeaderMismatch,
+			wantMessage:    "header mismatch: Mcp-Name header value 'otherTool' does not match body value 'getPetById'",
+		},
+		{
+			name:           "Mcp-Name invalid Base64 sentinel",
+			requestBody:    toolsCallBody,
+			headers:        mcpRequestHeaders{protocolVersion: v20260728, method: methodToolsCall, name: "=?base64?!!!?="},
+			wantHTTPStatus: typev3.StatusCode_BadRequest,
+			wantCode:       mcp.CodeHeaderMismatch,
+		},
+		{
 			name:           "unknown method gets 404",
 			requestBody:    `{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{` + modernMeta + `}}`,
+			headers:        mcpRequestHeaders{protocolVersion: v20260728, method: "resources/list"},
 			wantHTTPStatus: typev3.StatusCode_NotFound,
-			wantCode:       jsonrpc.CodeMethodNotFound,
+			wantCode:       -32601,
 			wantMessage:    "Method not found",
 		},
 		{
 			name:           "unknown tool gets 400",
 			requestBody:    `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"noSuchTool","arguments":{},` + modernMeta + `}}`,
+			headers:        mcpRequestHeaders{protocolVersion: v20260728, method: methodToolsCall, name: "noSuchTool"},
 			wantHTTPStatus: typev3.StatusCode_BadRequest,
 			wantCode:       jsonrpc.CodeInvalidParams,
 			wantMessage:    "Unknown tool: noSuchTool",
@@ -93,7 +155,7 @@ func TestModernRequests_ErrorPaths(t *testing.T) {
 			t.Parallel()
 			server := newTestServer(t, "testdata/petstore.openapi.yaml")
 
-			response := server.mcpRequestHandler(context.Background(), []byte(tt.requestBody))
+			response := server.mcpRequestHandler(context.Background(), []byte(tt.requestBody), tt.headers)
 			require.NotNil(t, response)
 			immediate := requireImmediateResponse(t, response.Immediate)
 			assert.Equal(t, tt.wantHTTPStatus, immediate.GetStatus().GetCode(), "HTTP status")
@@ -106,16 +168,19 @@ func TestModernRequests_ErrorPaths(t *testing.T) {
 	}
 }
 
+// The legacy era imposes no mirrored-header contract, so the declaration is
+// ignored, headers included.
 func TestModernRequests_PreCutoverMetaVersionIsIgnored(t *testing.T) {
 	t.Parallel()
 
 	legacyMeta := `"_meta":{"io.modelcontextprotocol/protocolVersion":"2025-11-25"}`
+	legacyHeaders := mcpRequestHeaders{protocolVersion: v20251125}
 
 	t.Run("tools/list is served unshaped", func(t *testing.T) {
 		t.Parallel()
 		server := newTestServer(t, "testdata/petstore.openapi.yaml")
 
-		response := server.mcpRequestHandler(context.Background(), []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{`+legacyMeta+`}}`))
+		response := server.mcpRequestHandler(context.Background(), []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{`+legacyMeta+`}}`), legacyHeaders)
 		immediate := requireImmediateResponse(t, response.Immediate)
 		assert.Equal(t, typev3.StatusCode_OK, immediate.GetStatus().GetCode())
 
@@ -128,7 +193,7 @@ func TestModernRequests_PreCutoverMetaVersionIsIgnored(t *testing.T) {
 		t.Parallel()
 		server := newTestServer(t, "testdata/petstore.openapi.yaml")
 
-		response := server.mcpRequestHandler(context.Background(), []byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"getPetById","arguments":{"petId":1},`+legacyMeta+`}}`))
+		response := server.mcpRequestHandler(context.Background(), []byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"getPetById","arguments":{"petId":1},`+legacyMeta+`}}`), legacyHeaders)
 		require.NotNil(t, response.Reroute)
 		assert.IsType(t, legacyEra{}, response.Era)
 	})
@@ -139,8 +204,9 @@ func TestModernRequests_UnsupportedVersion(t *testing.T) {
 
 	server := newTestServer(t, "testdata/petstore.openapi.yaml")
 	requestBody := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2099-01-01"}}}`)
+	headers := mcpRequestHeaders{protocolVersion: "2099-01-01", method: methodToolsList}
 
-	response := server.mcpRequestHandler(context.Background(), requestBody)
+	response := server.mcpRequestHandler(context.Background(), requestBody, headers)
 	immediate := requireImmediateResponse(t, response.Immediate)
 	assert.Equal(t, typev3.StatusCode_BadRequest, immediate.GetStatus().GetCode(), "HTTP status")
 
@@ -195,4 +261,27 @@ func TestToolCallResponseShapingPerEra(t *testing.T) {
 			require.NotEmpty(t, content)
 		})
 	}
+}
+
+func TestModernToolCallStripsMCPHeadersOnReroute(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t, "testdata/petstore.openapi.yaml")
+	requestBody := []byte(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"getPetById","arguments":{"petId":1},` + modernMeta + `}}`)
+	headers := mcpRequestHeaders{
+		protocolVersion:  v20260728,
+		method:           methodToolsCall,
+		name:             "getPetById",
+		paramHeaderNames: []string{"mcp-param-x-trace"},
+	}
+
+	response := server.mcpRequestHandler(context.Background(), requestBody, headers)
+	require.NotNil(t, response.Reroute, "modern tools/call should reroute upstream")
+	assert.IsType(t, modernEra{}, response.Era)
+
+	removed := response.Reroute.headers.GetRequestHeaders().GetResponse().GetHeaderMutation().GetRemoveHeaders()
+	assert.Contains(t, removed, headerMCPProtocolVersion)
+	assert.Contains(t, removed, headerMCPMethod)
+	assert.Contains(t, removed, headerMCPName)
+	assert.Contains(t, removed, "mcp-param-x-trace")
 }

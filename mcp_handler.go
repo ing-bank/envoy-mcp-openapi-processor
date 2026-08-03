@@ -167,7 +167,7 @@ func toolExecutionErrorResponse(span trace.Span, era protocolEra, id jsonrpc.ID,
 	})
 }
 
-func (s *extProcServer) mcpRequestHandler(ctx context.Context, body []byte) *mcpProcResponse {
+func (s *extProcServer) mcpRequestHandler(ctx context.Context, body []byte, hdrs mcpRequestHeaders) *mcpProcResponse {
 	span := trace.SpanFromContext(ctx)
 	span.SetAttributes(attribute.Int(attrBodySize, len(body)))
 
@@ -192,18 +192,20 @@ func (s *extProcServer) mcpRequestHandler(ctx context.Context, body []byte) *mcp
 	)
 
 	declared := metaProtocolVersion(req.Params)
-	if declared != "" {
-		span.SetAttributes(attribute.String(attrMCPProtocolVersion, protocolVersionLabel(declared)))
+	era, requestedVersion, ok := s.resolveEra(req.Method, declared, hdrs.protocolVersion)
+	if requestedVersion != "" {
+		span.SetAttributes(attribute.String(attrMCPProtocolVersion, protocolVersionLabel(requestedVersion)))
 	}
-
-	era, ok := s.resolveEra(req.Method, declared)
 	if !ok {
 		return errorResponse(span, era, req.ID, mcp.CodeUnsupportedProtocolVersion,
-			fmt.Sprintf("Unsupported protocol version: %s", declared),
-			map[string]any{"supported": supportedProtocolVersions, "requested": declared})
+			fmt.Sprintf("Unsupported protocol version: %s", requestedVersion),
+			map[string]any{"supported": supportedProtocolVersions, "requested": requestedVersion})
 	}
 	if !era.serves(req.Method) {
 		return errorResponse(span, era, req.ID, jsonrpc.CodeMethodNotFound, "Method not found", nil)
+	}
+	if err := era.validateHeaders(req, declared, hdrs); err != nil {
+		return errorResponse(span, era, req.ID, mcp.CodeHeaderMismatch, err.Error(), nil)
 	}
 
 	switch req.Method {
@@ -214,7 +216,7 @@ func (s *extProcServer) mcpRequestHandler(ctx context.Context, body []byte) *mcp
 	case methodToolsList:
 		return resultResponse(span, era, req.ID, &mcp.ListToolsResult{Tools: s.registry.Tools()})
 	case methodToolsCall:
-		return s.handleToolCall(span, era, req)
+		return s.handleToolCall(span, era, req, hdrs.paramHeaderNames)
 	default:
 		return errorResponse(span, era, req.ID, jsonrpc.CodeMethodNotFound, "Method not found", nil)
 	}
@@ -257,7 +259,7 @@ func (s *extProcServer) handleInitialize(span trace.Span, era protocolEra, req *
 	})
 }
 
-func (s *extProcServer) handleToolCall(span trace.Span, era protocolEra, req *jsonrpc.Request) *mcpProcResponse {
+func (s *extProcServer) handleToolCall(span trace.Span, era protocolEra, req *jsonrpc.Request, stripHeaders []string) *mcpProcResponse {
 	var callParams callToolRequestParams
 	if err := json.Unmarshal(req.Params, &callParams); err != nil {
 		zap.L().Error("Error unmarshaling tool call request", zap.Error(err))
@@ -293,7 +295,7 @@ func (s *extProcServer) handleToolCall(span trace.Span, era protocolEra, req *js
 	)
 	return &mcpProcResponse{
 		Id:                 req.ID,
-		Reroute:            rerouteWithBodyMutation(toolConfig.Endpoint.Host, strings.ToUpper(toolConfig.Endpoint.Method), path, requestBody, endpointReq.extraHeaders),
+		Reroute:            rerouteWithBodyMutation(toolConfig.Endpoint.Host, strings.ToUpper(toolConfig.Endpoint.Method), path, requestBody, endpointReq.extraHeaders, stripHeaders),
 		ToolResponseConfig: &toolConfig.toolResponseConfig,
 		Era:                era,
 	}

@@ -73,7 +73,7 @@ func TestMcpRequestHandler_JSONRPCErrorCodes(t *testing.T) {
 			t.Parallel()
 			server := newTestServer(t, "testdata/petstore.openapi.yaml")
 
-			result := server.mcpRequestHandler(context.Background(), tt.requestBody)
+			result := server.mcpRequestHandler(context.Background(), tt.requestBody, mcpRequestHeaders{})
 
 			require.NotNil(t, result)
 			require.NotNil(t, result.Immediate)

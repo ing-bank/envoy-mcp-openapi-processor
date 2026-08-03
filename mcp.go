@@ -61,6 +61,7 @@ type protocolEra interface {
 	// stamping the fields the generation makes mandatory.
 	encodeResult(result any) (json.RawMessage, error)
 	errorStatus(code int64) typev3.StatusCode
+	validateHeaders(req *jsonrpc.Request, metaVersion string, hdrs mcpRequestHeaders) error
 }
 
 // legacyEra serves every revision up to and including [latestLegacyVersion].
@@ -85,6 +86,12 @@ func (legacyEra) encodeResult(result any) (json.RawMessage, error) {
 // protocol errors included, in the body of a successful HTTP response.
 func (legacyEra) errorStatus(int64) typev3.StatusCode {
 	return typev3.StatusCode_OK
+}
+
+// validateHeaders accepts anything. The mirrored MCP request headers are a
+// 2026-07-28 addition, so a legacy client is not required to send them.
+func (legacyEra) validateHeaders(*jsonrpc.Request, string, mcpRequestHeaders) error {
+	return nil
 }
 
 // modernEra serves 2026-07-28 and later. There is no handshake, so the method
@@ -143,7 +150,7 @@ func (e modernEra) metaWithServerInfo(meta map[string]any) map[string]any {
 // as in the legacy era.
 func (modernEra) errorStatus(code int64) typev3.StatusCode {
 	switch code {
-	case mcp.CodeUnsupportedProtocolVersion, jsonrpc.CodeInvalidParams:
+	case mcp.CodeUnsupportedProtocolVersion, mcp.CodeHeaderMismatch, jsonrpc.CodeInvalidParams:
 		return typev3.StatusCode_BadRequest
 	case jsonrpc.CodeMethodNotFound:
 		return typev3.StatusCode_NotFound
@@ -152,16 +159,26 @@ func (modernEra) errorStatus(code int64) typev3.StatusCode {
 	}
 }
 
-// resolveEra also reports whether the request may be served. Past the cutover
-// an unsupported version is refused rather than ignored.
-func (s *extProcServer) resolveEra(method string, declared string) (protocolEra, bool) {
+// validateHeaders enforces SEP-2243 (see [validateModernHeaders]).
+func (modernEra) validateHeaders(req *jsonrpc.Request, metaVersion string, hdrs mcpRequestHeaders) error {
+	return validateModernHeaders(req, metaVersion, hdrs)
+}
+
+// resolveEra also reports the version that selected the era and whether the
+// request may be served. Past the cutover an unsupported version is refused
+// rather than ignored.
+func (s *extProcServer) resolveEra(method string, declared string, mirrored string) (protocolEra, string, bool) {
 	if method == methodInitialize || method == methodNotificationsInitialized {
-		return legacyEra{}, true
+		return legacyEra{}, "", true
 	}
-	if !isModernVersion(declared) {
-		return legacyEra{}, true
+	requested := declared
+	if !isModernVersion(requested) {
+		requested = mirrored
 	}
-	return modernEra{serverInfo: s.serverInfo}, isSupportedVersion(declared)
+	if !isModernVersion(requested) {
+		return legacyEra{}, "", true
+	}
+	return modernEra{serverInfo: s.serverInfo}, requested, isSupportedVersion(requested)
 }
 
 // metaProtocolVersion returns "" when the entry is absent or malformed.

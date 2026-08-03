@@ -2,6 +2,7 @@ package envoy_mcp_openapi_processor
 
 import (
 	"net/http"
+	"slices"
 	"strconv"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
@@ -12,8 +13,9 @@ import (
 // contentHeaders are the headers which are removed whenever the body is replaced.
 var contentHeaders = []string{"content-length", "content-type"}
 
-// removeOnRoutingHeaders are the headers dropped when the request is mutated and rerouted
-var removeOnRoutingHeaders = []string{"content-length", "content-type", "mcp-protocol-version"}
+// removeOnRoutingHeaders are the headers dropped when the request is mutated
+// and rerouted, so MCP client headers are not forwarded to the upstream API.
+var removeOnRoutingHeaders = []string{"content-length", "content-type", headerMCPProtocolVersion, headerMCPMethod, headerMCPName}
 
 var (
 	// requestFactory provides ext_proc wrappers for request direction
@@ -70,7 +72,7 @@ func appendHeader(headers []*corev3.HeaderValueOption, key string, value string)
 	})
 }
 
-func rerouteWithBodyMutation(host string, method string, path string, body []byte, extraHeaders map[string]string) *streamedMutation {
+func rerouteWithBodyMutation(host string, method string, path string, body []byte, extraHeaders map[string]string, stripHeaders []string) *streamedMutation {
 	count := 3 + len(extraHeaders) // (method, path, authority) + extra headers
 	headers := make([]*corev3.HeaderValueOption, 0, count)
 
@@ -82,7 +84,11 @@ func rerouteWithBodyMutation(host string, method string, path string, body []byt
 	headers = appendHeader(headers, ":path", path)
 	headers = appendHeader(headers, ":authority", host)
 
-	headerMutation := requestFactory.headerMutation(headers, removeOnRoutingHeaders)
+	removeHeaders := removeOnRoutingHeaders
+	if len(stripHeaders) > 0 {
+		removeHeaders = append(slices.Clone(removeOnRoutingHeaders), stripHeaders...)
+	}
+	headerMutation := requestFactory.headerMutation(headers, removeHeaders)
 	return &streamedMutation{headers: headerMutation, body: body}
 }
 

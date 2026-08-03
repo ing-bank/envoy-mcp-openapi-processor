@@ -55,7 +55,7 @@ func TestMcpServer_LogsToolCallsToOtel(t *testing.T) {
 
 	// Make a tools/call request
 	toolCallReq := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"listPets","arguments":{}}}`
-	_ = server.mcpRequestHandler(context.Background(), []byte(toolCallReq))
+	_ = server.mcpRequestHandler(context.Background(), []byte(toolCallReq), mcpRequestHeaders{})
 
 	_ = logger.Sync()
 

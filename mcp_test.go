@@ -53,30 +53,42 @@ func TestResolveEra(t *testing.T) {
 	server := &extProcServer{serverInfo: ServerInfo{Name: "srv", Version: "1"}}
 
 	tests := []struct {
-		name     string
-		method   string
-		declared string
-		wantEra  protocolEra
-		wantOK   bool
+		name        string
+		method      string
+		declared    string
+		mirrored    string
+		wantEra     protocolEra
+		wantVersion string
+		wantOK      bool
 	}{
-		{name: "no declared version is legacy", method: methodToolsList, wantEra: legacyEra{}, wantOK: true},
+		{name: "nothing declared is legacy", method: methodToolsList, wantEra: legacyEra{}, wantOK: true},
 		{name: "initialize is legacy", method: methodInitialize, wantEra: legacyEra{}, wantOK: true},
 		{name: "initialize ignores a declared version", method: methodInitialize, declared: v20260728, wantEra: legacyEra{}, wantOK: true},
 		{name: "notifications/initialized is legacy", method: methodNotificationsInitialized, declared: v20260728, wantEra: legacyEra{}, wantOK: true},
-		{name: "supported modern version", method: methodToolsList, declared: v20260728, wantEra: modernEra{}, wantOK: true},
+		{name: "supported modern _meta version", method: methodToolsList, declared: v20260728, wantEra: modernEra{}, wantVersion: v20260728, wantOK: true},
 		// A pre-cutover declaration is a legacy client restating its negotiated
 		// version, so it is ignored and the request is served.
-		{name: "pre-cutover version is ignored", method: methodToolsList, declared: v20251125, wantEra: legacyEra{}, wantOK: true},
-		{name: "unsupported older version is ignored", method: methodToolsList, declared: "2024-11-05", wantEra: legacyEra{}, wantOK: true},
+		{name: "pre-cutover _meta version is ignored", method: methodToolsList, declared: v20251125, wantEra: legacyEra{}, wantOK: true},
+		{name: "unsupported older _meta version is ignored", method: methodToolsList, declared: "2024-11-05", wantEra: legacyEra{}, wantOK: true},
 		// Past the cutover the declaration is binding, so an unknown version
 		// there is refused rather than ignored.
-		{name: "unknown future version is refused", method: methodToolsList, declared: "2099-01-01", wantEra: modernEra{}, wantOK: false},
+		{name: "unknown future _meta version is refused", method: methodToolsList, declared: "2099-01-01", wantEra: modernEra{}, wantVersion: "2099-01-01"},
+		// The mirrored MCP-Protocol-Version header selects the era on its own,
+		// so a client that sends it but omits _meta is handled as modern and
+		// fails header validation instead of falling back to legacy.
+		{name: "mirrored modern header alone selects modern", method: methodToolsList, mirrored: v20260728, wantEra: modernEra{}, wantVersion: v20260728, wantOK: true},
+		{name: "mirrored legacy header stays legacy", method: methodToolsList, mirrored: v20251125, wantEra: legacyEra{}, wantOK: true},
+		// A pre-cutover _meta entry alongside a modern header is modern
+		// (via the header) and then fails header validation, not version checks.
+		{name: "pre-cutover _meta with modern header", method: methodToolsList, declared: v20251125, mirrored: v20260728, wantEra: modernEra{}, wantVersion: v20260728, wantOK: true},
+		{name: "_meta wins over a mirrored header", method: methodToolsList, declared: v20260728, mirrored: "2099-01-01", wantEra: modernEra{}, wantVersion: v20260728, wantOK: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			era, ok := server.resolveEra(tt.method, tt.declared)
+			era, version, ok := server.resolveEra(tt.method, tt.declared, tt.mirrored)
 			assert.IsType(t, tt.wantEra, era)
+			assert.Equal(t, tt.wantVersion, version)
 			assert.Equal(t, tt.wantOK, ok)
 		})
 	}
@@ -124,6 +136,19 @@ func TestProtocolEraErrorStatus(t *testing.T) {
 			assert.Equal(t, tt.wantModern, modernEra{}.errorStatus(tt.code), "modern")
 		})
 	}
+}
+
+func TestProtocolEraValidateHeaders(t *testing.T) {
+	req := &jsonrpc.Request{Method: methodToolsList}
+
+	mirrored := mcpRequestHeaders{protocolVersion: v20260728, method: methodToolsList}
+	bare := mcpRequestHeaders{}
+
+	assert.NoError(t, legacyEra{}.validateHeaders(req, "", bare), "legacy tolerates absent headers")
+	assert.NoError(t, legacyEra{}.validateHeaders(req, "", mirrored), "legacy tolerates present headers")
+
+	assert.NoError(t, modernEra{}.validateHeaders(req, v20260728, mirrored))
+	assert.Error(t, modernEra{}.validateHeaders(req, v20260728, bare), "the modern era requires the mirrored headers")
 }
 
 func TestProtocolEraEncodeResult(t *testing.T) {

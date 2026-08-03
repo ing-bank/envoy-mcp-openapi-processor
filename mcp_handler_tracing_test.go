@@ -19,6 +19,7 @@ func TestMcpRequestHandler_Tracing(t *testing.T) {
 	tests := []struct {
 		name                  string
 		requestBody           string
+		headers               mcpRequestHeaders
 		wantNilResp           bool
 		wantMethod            string
 		wantMCPMethod         string
@@ -104,7 +105,7 @@ func TestMcpRequestHandler_Tracing(t *testing.T) {
 			ctx, rootSpan := tracer.Start(context.Background(), spanName)
 
 			// Call the handler
-			resp := server.mcpRequestHandler(ctx, []byte(tt.requestBody))
+			resp := server.mcpRequestHandler(ctx, []byte(tt.requestBody), tt.headers)
 			assert.True(t, tt.wantNilResp == (resp == nil), "mcpRequestHandler() nil return")
 
 			rootSpan.End()
@@ -164,8 +165,9 @@ func TestMcpRequestHandler_ProtocolVersionAttributeIsBounded(t *testing.T) {
 			ctx, rootSpan := tracer.Start(context.Background(), spanName)
 
 			body := fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":%q}}}`, tt.declared)
+			hdrs := mcpRequestHeaders{protocolVersion: tt.declared, method: methodToolsList}
 
-			server.mcpRequestHandler(ctx, []byte(body))
+			server.mcpRequestHandler(ctx, []byte(body), hdrs)
 			rootSpan.End()
 
 			testSpan, found := findSpanByName(spanRecorder.Ended(), spanName)

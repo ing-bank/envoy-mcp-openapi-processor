@@ -28,9 +28,11 @@ disjoint entry points, so every request selects one unambiguously:
 - **Legacy era (`2025-06-18`, `2025-11-25`)**: the client starts with the `initialize` handshake and declares no
   version on subsequent requests. Version negotiation never yields a modern version, so a client that asks for
   one over the handshake is answered with a version it can actually use statefully.
-- **Modern era (`2026-07-28`)**: there is no handshake, and every request carries its protocol version in
-  `params._meta` (`io.modelcontextprotocol/protocolVersion`). Results carry `resultType` and the serverInfo
-  `_meta` entry, and an unknown method answers HTTP 404 rather than the legacy 200.
+- **Modern era (`2026-07-28`)**: there is no handshake. Every request carries its protocol version in
+  `params._meta` (`io.modelcontextprotocol/protocolVersion`) and mirrors it in the `MCP-Protocol-Version` header,
+  alongside `Mcp-Method` (and `Mcp-Name` for `tools/call`). Those headers are validated against the JSON-RPC body
+  and mismatches are refused with HTTP 400 and JSON-RPC error `-32020`. Results carry `resultType` and the
+  serverInfo `_meta` entry, and an unknown method answers HTTP 404 rather than the legacy 200.
 
 ## OpenTelemetry
 

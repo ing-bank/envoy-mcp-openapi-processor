@@ -285,7 +285,7 @@ func TestPetstoreProtocolTranslation_OperationCases(t *testing.T) {
 			assertToolTranslation(t, tool, toolConfig, tc.toolExpectation)
 
 			requestBody := buildToolsCallRequest(t, tc.operationID, tc.requestArguments)
-			reqResult := server.mcpRequestHandler(context.Background(), requestBody)
+			reqResult := server.mcpRequestHandler(context.Background(), requestBody, mcpRequestHeaders{})
 			require.NotNil(t, reqResult)
 			require.NotNil(t, reqResult.Reroute)
 			assertRequestTranslation(t, reqResult, tc.requestExpectation)
@@ -346,7 +346,7 @@ func TestPetstoreProtocolTranslation_ToolExecutionErrorPaths(t *testing.T) {
 				tc.setup(t, registry)
 			}
 
-			result := server.mcpRequestHandler(context.Background(), tc.request)
+			result := server.mcpRequestHandler(context.Background(), tc.request, mcpRequestHeaders{})
 			require.NotNil(t, result)
 			require.NotNil(t, result.Immediate)
 

@@ -66,8 +66,9 @@ func FuzzMcpRequestHandler(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		ctx := context.Background()
-		// Must not panic regardless of input
-		server.mcpRequestHandler(ctx, data)
+		// Must not panic regardless of input, with and without modern headers
+		server.mcpRequestHandler(ctx, data, mcpRequestHeaders{})
+		server.mcpRequestHandler(ctx, data, mcpRequestHeaders{protocolVersion: v20260728, method: methodToolsCall, name: "getPetById"})
 	})
 }
 
