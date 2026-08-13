@@ -25,6 +25,9 @@ func main() {
 			OpenAPISpecPattern: "/home/app/conf/openapi/*.yaml",
 			StructuredOutput:   true,
 		},
+		// The MCP Inspector connects from its own container, so requests carry
+		// the Docker service name as Host instead of a loopback address.
+		AllowedHosts: []string{"localhost", "127.0.0.1", "::1", "envoy"},
 		ServerInfo: mcp_proc.ServerInfo{
 			Name:         "mcp-server",
 			Version:      "1.0.0",

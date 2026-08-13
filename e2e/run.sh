@@ -115,18 +115,6 @@ case_delete_rejected() {
   pass "$name"
 }
 
-# CORS preflight is needed for local browser-based testing (MCP inspector)
-# and Envoy is configured to skip ext_proc in this case.
-case_cors_preflight() {
-  local name="OPTIONS /mcp CORS preflight passes through"
-  request "$name" 200 -X OPTIONS \
-    -H 'Origin: http://localhost:6274' \
-    -H 'Access-Control-Request-Method: POST' || return 0
-  assert_header "$name" 'access-control-allow-origin' || return 0
-  assert_header "$name" 'access-control-allow-methods' || return 0
-  pass "$name"
-}
-
 # tools/list is answered by the processor itself (immediate-response path).
 case_tools_list() {
   local name="tools/list -> non-empty tool list"
@@ -394,7 +382,6 @@ echo "=== running probes ==="
 case_bodyless_request
 case_get_rejected
 case_delete_rejected
-case_cors_preflight
 case_tools_list
 case_notification
 case_empty_upstream_body

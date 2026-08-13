@@ -34,18 +34,14 @@ services:
     volumes:
       - "../../testdata/petstore.openapi.yaml:/openapi/petstore.openapi.yaml:ro"
   inspector:
-    image: ghcr.io/modelcontextprotocol/inspector:0.21.2-hotfix-3
+    image: ghcr.io/modelcontextprotocol/inspector:2.2.0
+    command: ["--web", "--config", "/home/node/mcp-catalog.json"]
     ports:
       - "127.0.0.1:6274:6274"
     environment:
-      HOST: "0.0.0.0"
-      MCP_AUTO_OPEN_ENABLED: "false"
-    healthcheck:
-      test: "node -e \"require('http').get('http://127.0.0.1:6274', (res) => process.exit(res.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))\""
-      interval: 1s
-      timeout: 1s
-      retries: 5
-      start_period: 1s
+      DANGEROUSLY_OMIT_AUTH: "true"
+    volumes:
+      - "./mcp-catalog.json:/home/node/mcp-catalog.json:ro"
 
 volumes:
   shared-uds:

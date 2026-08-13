@@ -17,37 +17,13 @@ static_resources:
                   virtual_hosts:
                     - name: local_service
                       domains: ["*"]
-                      typed_per_filter_config:
-                        envoy.filters.http.cors:
-                          "@type": type.googleapis.com/envoy.extensions.filters.http.cors.v3.CorsPolicy
-                          allow_origin_string_match:
-                            - prefix: "http://localhost"
-                          allow_methods: "OPTIONS, GET, POST, PATCH, PUT, DELETE"
-                          allow_headers: "*"
-                          max_age: "86400"
                       routes:
-                        - name: mcp_inspector_cors_preflight
-                          match:
-                            prefix: "/mcp"
-                            headers:
-                              - name: ":method"
-                                string_match:
-                                  exact: "OPTIONS"
-                          route:
-                            cluster: prism
-                          typed_per_filter_config:
-                            envoy.filters.http.ext_proc:
-                              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
-                              disabled: true
                         - name: main
                           match:
                             prefix: "/mcp"
                           route:
                             cluster: prism
                 http_filters:
-                  - name: envoy.filters.http.cors
-                    typed_config:
-                      '@type': type.googleapis.com/envoy.extensions.filters.http.cors.v3.Cors
                   - name: envoy.filters.http.ext_proc
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor

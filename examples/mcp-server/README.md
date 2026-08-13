@@ -36,13 +36,12 @@ back into an MCP result.
 
 2. To access the MCP Inspector UI:
 
-    - Go to http://localhost:6274/?transport=streamable-http&serverUrl=http://localhost:10000/mcp
-    - Select **Connection Type: Direct**
-    - Click **Connect**
+    - Go to http://localhost:6274
+    - Select the preconfigured **petstore-mcp-{modern,legacy}** server and toggle **Connect**
 
 3. Once connected, you can:
 
-    - **List Tools:** see the MCP tools generated from the Petstore OpenAPI spec.
+    - **List Tools:** select "Tools" tab to see the MCP tools generated from the Petstore OpenAPI spec.
     - **Call Tools:** invoke individual tools and inspect the responses.
 
 4. To stop the example, press `Ctrl+C` in the terminal where docker compose was running.
@@ -54,4 +53,5 @@ back into an MCP result.
 | `main.go`            | Entrypoint that runs the external processor (ext_proc) server.                                       |
 | `envoy-mcp.yaml`     | Envoy configuration wiring the ext_proc filter and the Prism upstream.                               |
 | `docker-compose.yml` | Compose file defining the `envoy-mcp-openapi-processor`, `envoy`, `prism`, and `inspector` services. |
+| `mcp-catalog.json`   | Server catalog preloaded into the Inspector so the Petstore MCP server is ready to connect.          |
 | `Dockerfile`         | Multi-stage build: compiles the Go ext_proc binary into a minimal image.                             |
