@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "petstore-mcp-modern": {
+      "type": "streamable-http",
+      "url": "http://envoy:10000/mcp",
+      "protocolEra": "modern",
+      "headers": {
+        "Authorization": "Bearer test",
+        "api_key": "test"
+      }
+    },
+    "petstore-mcp-legacy": {
+      "type": "streamable-http",
+      "url": "http://envoy:10000/mcp",
+      "protocolEra": "legacy",
+      "headers": {
+        "Authorization": "Bearer test",
+        "api_key": "test"
+      }
+    }
+  }
+}
