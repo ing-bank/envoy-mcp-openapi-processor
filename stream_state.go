@@ -53,6 +53,18 @@ type requestContext struct {
 	jsonrpcID          jsonrpc.ID
 	toolResponseConfig *toolResponseConfig
 	upstreamStatusCode int
+	// era is set on the request path; read it through
+	// [requestContext.protocolEra], which defaults it.
+	era protocolEra
+}
+
+// protocolEra defaults to legacy, so a context built without one behaves like a
+// pre-2026 request.
+func (rc *requestContext) protocolEra() protocolEra {
+	if rc.era == nil {
+		return legacyEra{}
+	}
+	return rc.era
 }
 
 // isToolCall reports whether this cycle's request was a tool call the
@@ -103,7 +115,7 @@ func (st *stateAwaitingRequestHeaders) handle(ctx context.Context, strm *stream,
 			return &stateAwaitingRequestHeaders{}, newImmediateBodyResponse(encodeJSONRPCError(jsonrpc.ID{}, jsonrpc.CodeInvalidRequest, msg)), nil
 		}
 		strm.beginBuffering()
-		return &stateBufferingRequest{}, nil, nil
+		return &stateBufferingRequest{mcpHeaders: captureMCPRequestHeaders(hdr.RequestHeaders.GetHeaders())}, nil, nil
 	}
 
 	return protocolViolation(req, "RequestHeaders")
@@ -134,7 +146,11 @@ func (st *stateDrainingRequest) handle(ctx context.Context, strm *stream, req *e
 }
 
 // stateBufferingRequest receives RequestBody chunks until EndOfStream.
-type stateBufferingRequest struct{}
+type stateBufferingRequest struct {
+	// mcpHeaders are the MCP Streamable HTTP headers captured at the
+	// request-headers phase, validated against the body once it is buffered.
+	mcpHeaders mcpRequestHeaders
+}
 
 func (st *stateBufferingRequest) handle(ctx context.Context, strm *stream, req *extProcPb.ProcessingRequest) (streamState, []*extProcPb.ProcessingResponse, error) {
 	switch value := req.Request.(type) {
@@ -161,11 +177,12 @@ func (st *stateBufferingRequest) finalize(ctx context.Context, strm *stream, has
 	)
 	defer span.End()
 
-	handlerResult := strm.server.mcpRequestHandler(ctx, strm.buf)
+	handlerResult := strm.server.mcpRequestHandler(ctx, strm.buf, st.mcpHeaders)
 
 	reqCtx := requestContext{
 		jsonrpcID:          handlerResult.Id,
 		toolResponseConfig: handlerResult.ToolResponseConfig,
+		era:                handlerResult.Era,
 	}
 
 	// A reroute streams the rewritten request body (framed here with trailers if
@@ -242,7 +259,7 @@ func (st *stateBufferingResponse) finalize(ctx context.Context, strm *stream, ha
 	)
 	defer span.End()
 
-	mutation := strm.server.mcpResponseHandler(ctx, strm.buf, st.request.jsonrpcID, st.request.toolResponseConfig, httpStatusToErrorInfo(st.request.upstreamStatusCode))
+	mutation := mcpResponseHandler(ctx, strm.buf, &st.request)
 	reps := frame(mutation, responseFactory, hasTrailers)
 	return &stateAwaitingRequestHeaders{}, reps, nil
 }

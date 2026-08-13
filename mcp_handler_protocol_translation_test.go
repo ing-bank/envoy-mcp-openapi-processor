@@ -285,12 +285,12 @@ func TestPetstoreProtocolTranslation_OperationCases(t *testing.T) {
 			assertToolTranslation(t, tool, toolConfig, tc.toolExpectation)
 
 			requestBody := buildToolsCallRequest(t, tc.operationID, tc.requestArguments)
-			reqResult := server.mcpRequestHandler(context.Background(), requestBody)
+			reqResult := server.mcpRequestHandler(context.Background(), requestBody, mcpRequestHeaders{})
 			require.NotNil(t, reqResult)
 			require.NotNil(t, reqResult.Reroute)
 			assertRequestTranslation(t, reqResult, tc.requestExpectation)
 
-			respResult := server.mcpResponseHandler(context.Background(), tc.upstreamResponse, reqResult.Id, &toolConfig.toolResponseConfig, nil)
+			respResult := mcpResponseHandler(context.Background(), tc.upstreamResponse, &requestContext{jsonrpcID: reqResult.Id, toolResponseConfig: &toolConfig.toolResponseConfig, upstreamStatusCode: 200})
 			require.NotNil(t, respResult.headers)
 			assertResponseTranslation(t, frame(respResult, responseFactory, false), tc.upstreamResponse, tc.responseExpectation)
 		})
@@ -346,7 +346,7 @@ func TestPetstoreProtocolTranslation_ToolExecutionErrorPaths(t *testing.T) {
 				tc.setup(t, registry)
 			}
 
-			result := server.mcpRequestHandler(context.Background(), tc.request)
+			result := server.mcpRequestHandler(context.Background(), tc.request, mcpRequestHeaders{})
 			require.NotNil(t, result)
 			require.NotNil(t, result.Immediate)
 
@@ -369,13 +369,12 @@ func TestPetstoreProtocolTranslation_StructuredOutputDowngradesForInvalidJSON(t 
 	})
 	require.NoError(t, err)
 
-	server := &extProcServer{registry: registry}
 	toolConfig := registry.GetConfig("addPet")
 	require.NotNil(t, toolConfig)
 	require.True(t, toolConfig.toolResponseConfig.UseStructuredOutput)
 
 	upstreamBody := []byte(`not-json-upstream-body`)
-	response := server.mcpResponseHandler(context.Background(), upstreamBody, mustMakeID("test-id-structured-downgrade"), &toolConfig.toolResponseConfig, nil)
+	response := mcpResponseHandler(context.Background(), upstreamBody, &requestContext{jsonrpcID: mustMakeID("test-id-structured-downgrade"), toolResponseConfig: &toolConfig.toolResponseConfig, upstreamStatusCode: 200})
 	require.NotNil(t, response.headers)
 
 	assertResponseTranslation(t, frame(response, responseFactory, false), upstreamBody, responseExpectation{
@@ -394,14 +393,13 @@ func TestPetstoreProtocolTranslation_ResponseBodyMarksAPIFailuresAsToolErrors(t 
 	})
 	require.NoError(t, err)
 
-	server := &extProcServer{registry: registry}
 	toolConfig := registry.GetConfig("getPetById")
 	require.NotNil(t, toolConfig)
 
 	for _, upstreamStatus := range []int{500, 0} {
 		t.Run(fmt.Sprintf("status_%d", upstreamStatus), func(t *testing.T) {
 			upstreamBody := []byte(`{"message":"upstream failed"}`)
-			response := server.mcpResponseHandler(context.Background(), upstreamBody, mustMakeID("test-id-api-failure"), &toolConfig.toolResponseConfig, httpStatusToErrorInfo(upstreamStatus))
+			response := mcpResponseHandler(context.Background(), upstreamBody, &requestContext{jsonrpcID: mustMakeID("test-id-api-failure"), toolResponseConfig: &toolConfig.toolResponseConfig, upstreamStatusCode: upstreamStatus})
 			require.NotNil(t, response.headers)
 
 			assertResponseTranslation(t, frame(response, responseFactory, false), upstreamBody, responseExpectation{

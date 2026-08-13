@@ -2,12 +2,16 @@ package envoy_mcp_openapi_processor
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"testing"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extProcPb "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -70,6 +74,24 @@ func requireResponseHeadersResponse(t *testing.T, reps []*extProcPb.ProcessingRe
 func requireImmediateResponse(t *testing.T, reps []*extProcPb.ProcessingResponse) *extProcPb.ImmediateResponse {
 	t.Helper()
 	return findResponse(t, reps, "immediate response", func(r *extProcPb.ProcessingResponse) bool { return r.GetImmediateResponse() != nil }).GetImmediateResponse()
+}
+
+func decodeJSONRPCResult(t *testing.T, body []byte) (envelope map[string]any, result map[string]any) {
+	t.Helper()
+	require.NoError(t, json.Unmarshal(body, &envelope), "response body should be valid JSON")
+	result, ok := envelope["result"].(map[string]any)
+	require.True(t, ok, "response should contain a 'result' object, got: %s", body)
+	return envelope, result
+}
+
+func assertServerInfoMeta(t *testing.T, result map[string]any, wantName, wantVersion string) {
+	t.Helper()
+	meta, ok := result["_meta"].(map[string]any)
+	require.True(t, ok, "modern result should carry _meta")
+	serverInfo, ok := meta[mcp.MetaKeyServerInfo].(map[string]any)
+	require.True(t, ok, "_meta should carry %s", mcp.MetaKeyServerInfo)
+	assert.Equal(t, wantName, serverInfo["name"])
+	assert.Equal(t, wantVersion, serverInfo["version"])
 }
 
 func collectResponseBodyBytes(t *testing.T, reps []*extProcPb.ProcessingResponse) []byte {

@@ -132,6 +132,9 @@ case_tools_list() {
   local name="tools/list -> non-empty tool list"
   post "$name" 200 '{"jsonrpc":"2.0","id":3,"method":"tools/list"}' || return 0
   assert_jq "$name" '.id == 3 and (.result.tools | length > 0)' || return 0
+  # cache hints are a 2026-07-28 field: pre-2026 clients must not see them.
+  assert_jq "$name" '.result | has("ttlMs") | not' || return 0
+  assert_jq "$name" '.result | has("cacheScope") | not' || return 0
   pass "$name"
 }
 
@@ -176,6 +179,114 @@ case_malformed_json() {
   pass "$name"
 }
 
+# --- 2026-07-28 (modern era) probes ---
+
+MODERN_META='"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}'
+
+# server/discover is the modern replacement for the initialize handshake.
+case_modern_discover() {
+  local name="modern server/discover -> complete result with cache hints"
+  post "$name" 200 "{\"jsonrpc\":\"2.0\",\"id\":20,\"method\":\"server/discover\",\"params\":{$MODERN_META}}" \
+    -H 'MCP-Protocol-Version: 2026-07-28' -H 'Mcp-Method: server/discover' || return 0
+  assert_jq "$name" '.id == 20 and .result.resultType == "complete"' || return 0
+  assert_jq "$name" '.result.supportedVersions[0] == "2026-07-28"' || return 0
+  assert_jq "$name" '.result.ttlMs == 300000 and .result.cacheScope == "private"' || return 0
+  assert_jq "$name" '.result.capabilities.tools != null' || return 0
+  pass "$name"
+}
+
+case_modern_tools_list() {
+  local name="modern tools/list -> shaped result"
+  post "$name" 200 "{\"jsonrpc\":\"2.0\",\"id\":21,\"method\":\"tools/list\",\"params\":{$MODERN_META}}" \
+    -H 'MCP-Protocol-Version: 2026-07-28' -H 'Mcp-Method: tools/list' || return 0
+  assert_jq "$name" '.id == 21 and .result.resultType == "complete" and (.result.tools | length > 0)' || return 0
+  # the example server configures neither hint, so these are the defaults.
+  assert_jq "$name" '.result.ttlMs == 300000 and .result.cacheScope == "private"' || return 0
+  assert_jq "$name" '.result._meta["io.modelcontextprotocol/serverInfo"] != null' || return 0
+  pass "$name"
+}
+
+# the only modern probe answered through the upstream (reroute) path.
+case_modern_tool_call() {
+  local name="modern tools/call getPetById -> shaped result"
+  post "$name" 200 "{\"jsonrpc\":\"2.0\",\"id\":22,\"method\":\"tools/call\",\"params\":{\"name\":\"getPetById\",\"arguments\":{\"petId\":1},$MODERN_META}}" \
+    -H 'MCP-Protocol-Version: 2026-07-28' -H 'Mcp-Method: tools/call' -H 'Mcp-Name: getPetById' \
+    -H 'api_key: e2e' || return 0
+  assert_jq "$name" '.id == 22 and .result.isError != true' || return 0
+  assert_jq "$name" '.result.resultType == "complete"' || return 0
+  assert_jq "$name" '.result._meta["io.modelcontextprotocol/serverInfo"] != null' || return 0
+  pass "$name"
+}
+
+case_modern_unsupported_version() {
+  local name="unsupported protocol version -> 400 with supported list"
+  post "$name" 400 '{"jsonrpc":"2.0","id":24,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2099-01-01"}}}' \
+    -H 'MCP-Protocol-Version: 2099-01-01' -H 'Mcp-Method: tools/list' || return 0
+  assert_jq "$name" '.error.code == -32022' || return 0
+  assert_jq "$name" '.error.data.supported | index("2026-07-28") != null' || return 0
+  assert_jq "$name" '.error.data.requested == "2099-01-01"' || return 0
+  pass "$name"
+}
+
+# only a declaration at or past the cutover announces modern intent. A
+# pre-cutover one is a legacy client restating its negotiated version, so it is
+# served as if _meta were absent.
+case_precutover_meta_version() {
+  local name="pre-cutover _meta version -> served as legacy"
+  post "$name" 200 '{"jsonrpc":"2.0","id":28,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2025-11-25"}}}' || return 0
+  assert_jq "$name" '.id == 28 and (.result.tools | length > 0)' || return 0
+  assert_jq "$name" '.result | has("resultType") | not' || return 0
+  pass "$name"
+}
+
+# a modern MCP-Protocol-Version header selects the era on its own, so a request
+# that sends the header but omits the _meta entry gets a mismatch error instead
+# of legacy handling.
+case_mirrored_header_without_meta() {
+  local name="modern header without _meta -> 400 header mismatch"
+  post "$name" 400 '{"jsonrpc":"2.0","id":29,"method":"tools/list","params":{}}' \
+    -H 'MCP-Protocol-Version: 2026-07-28' -H 'Mcp-Method: tools/list' || return 0
+  assert_jq "$name" '.error.code == -32020' || return 0
+  pass "$name"
+}
+
+case_modern_missing_method_header() {
+  local name="modern request without Mcp-Method -> 400 header mismatch"
+  post "$name" 400 "{\"jsonrpc\":\"2.0\",\"id\":23,\"method\":\"tools/list\",\"params\":{$MODERN_META}}" \
+    -H 'MCP-Protocol-Version: 2026-07-28' || return 0
+  assert_jq "$name" '.error.code == -32020' || return 0
+  pass "$name"
+}
+
+# the modern era maps method-not-found onto HTTP 404; legacy answers 200.
+case_modern_unknown_method() {
+  local name="modern unknown method -> 404 method not found"
+  post "$name" 404 "{\"jsonrpc\":\"2.0\",\"id\":25,\"method\":\"resources/list\",\"params\":{$MODERN_META}}" \
+    -H 'MCP-Protocol-Version: 2026-07-28' -H 'Mcp-Method: resources/list' || return 0
+  assert_jq "$name" '.error.code == -32601' || return 0
+  pass "$name"
+}
+
+# legacy regression: the initialize handshake still selects legacy semantics
+# and never negotiates a modern version.
+case_legacy_initialize() {
+  local name="legacy initialize -> negotiates 2025-11-25"
+  post "$name" 200 '{"jsonrpc":"2.0","id":26,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"e2e","version":"0"}}}' || return 0
+  assert_jq "$name" '.id == 26 and .result.protocolVersion == "2025-11-25"' || return 0
+  assert_jq "$name" '.result.capabilities.tools != null and .result.serverInfo != null' || return 0
+  pass "$name"
+}
+
+# legacy regression: tools/call without any modern headers keeps working and
+# stays unshaped (no resultType).
+case_legacy_tool_call() {
+  local name="legacy tools/call getPetById -> unshaped result"
+  post "$name" 200 '{"jsonrpc":"2.0","id":27,"method":"tools/call","params":{"name":"getPetById","arguments":{"petId":1}}}' \
+    -H 'api_key: e2e' || return 0
+  assert_jq "$name" '.id == 27 and .result.isError != true' || return 0
+  assert_jq "$name" '.result | has("resultType") | not' || return 0
+  pass "$name"
+}
 
 # scan Envoy + processor logs for silent failures (e.g. ext_proc mutation
 # rejections that do not surface as a curl error).
@@ -290,6 +401,16 @@ case_empty_upstream_body
 case_rebinding_origin
 case_allowed_origin
 case_malformed_json
+case_modern_discover
+case_modern_tools_list
+case_modern_tool_call
+case_modern_unsupported_version
+case_precutover_meta_version
+case_mirrored_header_without_meta
+case_modern_missing_method_header
+case_modern_unknown_method
+case_legacy_initialize
+case_legacy_tool_call
 case_log_scan
 case_all_tools_success
 
