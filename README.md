@@ -79,6 +79,13 @@ func main() {
 
 Set the global tracer provider by calling `otel.SetTracerProvider(myTracerProvider)` and the global zap logger by calling `zap.ReplaceGlobals(myLogger)` before starting the server.
 
+## Log verbosity
+
+`TelemetryConfig.LogLevel` sets the minimum severity written to the console and exported to OpenTelemetry.
+It accepts `"debug"`, `"info"`, `"warn"` or `"error"`; empty/unset means `"info"`.
+
+If you build the logger yourself instead, pass the level to `CreateConsoleCore(level)` as a `zapcore.Level`.
+
 ## Development
 
 ### Tests

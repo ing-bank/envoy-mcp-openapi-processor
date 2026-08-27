@@ -8,11 +8,12 @@ import (
 
 	mcp_proc "github.com/ing-bank/envoy-mcp-openapi-processor"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 func main() {
 	ctx := context.Background()
-	zap.ReplaceGlobals(mcp_proc.CreateNewLoggerFromCore(mcp_proc.CreateConsoleCore()))
+	zap.ReplaceGlobals(mcp_proc.CreateNewLoggerFromCore(mcp_proc.CreateConsoleCore(zapcore.InfoLevel)))
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

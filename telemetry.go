@@ -8,4 +8,7 @@ type TelemetryConfig struct {
 	ServiceName string
 	// ServiceVersion is the version string reported in telemetry resource attributes.
 	ServiceVersion string
+	// LogLevel is the minimum severity written to the console and exported to
+	// OTel, one of "debug", "info", "warn" or "error". Empty means "info".
+	LogLevel string
 }
