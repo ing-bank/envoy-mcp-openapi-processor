@@ -14,14 +14,14 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-// CreateConsoleCore returns a zapcore.Core that writes info/warn logs to stdout
-// and error logs to stderr using a console encoder.
-func CreateConsoleCore() zapcore.Core {
+// CreateConsoleCore returns a zapcore.Core that writes logs at or above level
+// to stdout and error logs to stderr using a console encoder.
+func CreateConsoleCore(level zapcore.Level) zapcore.Core {
 	return zapcore.NewTee(
 		zapcore.NewCore(zapcore.NewConsoleEncoder(zap.NewDevelopmentEncoderConfig()), zapcore.AddSync(os.Stdout),
 			// log everything below error to stdout, and everything above to stderr stream.
-			zap.LevelEnablerFunc(func(lvl zapcore.Level) bool {
-				return lvl >= zapcore.InfoLevel && lvl <= zapcore.WarnLevel
+			zap.LevelEnablerFunc(func(l zapcore.Level) bool {
+				return l >= level && l < zapcore.ErrorLevel
 			})),
 		zapcore.NewCore(zapcore.NewConsoleEncoder(zap.NewDevelopmentEncoderConfig()), zapcore.AddSync(os.Stderr), zapcore.ErrorLevel))
 }
@@ -32,8 +32,13 @@ func CreateNewLoggerFromCore(core zapcore.Core) *zap.Logger {
 }
 
 // InitLogger sets up the global logger to use the OTel bridge, allowing logs to be exported to OTel.
+// Logs below config.LogLevel are written neither to the console nor to OTel.
 func InitLogger(config TelemetryConfig) error {
-	logger, err := createOtelLogger(config)
+	level, err := zapcore.ParseLevel(config.LogLevel)
+	if err != nil {
+		return fmt.Errorf("invalid config.LogLevel %q: %w", config.LogLevel, err)
+	}
+	logger, err := createOtelLogger(config, level)
 	if err != nil {
 		return fmt.Errorf("failed to initialize logger: %w", err)
 	}
@@ -41,23 +46,30 @@ func InitLogger(config TelemetryConfig) error {
 	return nil
 }
 
-func createOtelLogger(config TelemetryConfig) (*zap.Logger, error) {
-	core, err := createLoggerCore(config)
+func createOtelLogger(config TelemetryConfig, level zapcore.Level) (*zap.Logger, error) {
+	core, err := createLoggerCore(config, level)
 	if err != nil {
 		return nil, err
 	}
 	return CreateNewLoggerFromCore(core), nil
 }
 
-func createLoggerCore(config TelemetryConfig) (zapcore.Core, error) {
+func createLoggerCore(config TelemetryConfig, level zapcore.Level) (zapcore.Core, error) {
 	otelCore, err := createOtelCore(config)
 	if err != nil {
 		return nil, err
 	}
 
+	// otelzap has no level option and its Enabled delegates to the OTel SDK,
+	// which accepts every severity. Gate it so OTel matches the console.
+	gatedOtelCore, err := zapcore.NewIncreaseLevelCore(otelCore, level)
+	if err != nil {
+		return nil, fmt.Errorf("cannot apply log level to OTel core: %w", err)
+	}
+
 	core := zapcore.NewTee(
-		CreateConsoleCore(),
-		otelCore)
+		CreateConsoleCore(level),
+		gatedOtelCore)
 	return core, nil
 }
 

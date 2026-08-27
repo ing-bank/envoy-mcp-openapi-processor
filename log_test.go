@@ -43,7 +43,7 @@ func TestMcpServer_LogsToolCallsToOtel(t *testing.T) {
 	defer func() { _ = provider.Shutdown(context.Background()) }()
 
 	otelCore := otelzap.NewCore(componentName, otelzap.WithLoggerProvider(provider))
-	logger := zap.New(zapcore.NewTee(CreateConsoleCore(), otelCore), zap.AddCaller())
+	logger := zap.New(zapcore.NewTee(CreateConsoleCore(zapcore.InfoLevel), otelCore), zap.AddCaller())
 	restoreGlobals := zap.ReplaceGlobals(logger)
 	defer restoreGlobals()
 
@@ -67,4 +67,20 @@ func TestMcpServer_LogsToolCallsToOtel(t *testing.T) {
 	for i, record := range exporter.records {
 		t.Logf("Log %d: %v", i, record.Body().AsString())
 	}
+}
+
+func TestCreateConsoleCore_LevelGating(t *testing.T) {
+	debugCore := CreateConsoleCore(zapcore.DebugLevel)
+	assert.True(t, debugCore.Enabled(zapcore.DebugLevel))
+
+	infoCore := CreateConsoleCore(zapcore.InfoLevel)
+	assert.False(t, infoCore.Enabled(zapcore.DebugLevel))
+	assert.True(t, infoCore.Enabled(zapcore.InfoLevel))
+	assert.True(t, infoCore.Enabled(zapcore.ErrorLevel))
+}
+
+func TestInitLogger_InvalidLogLevel(t *testing.T) {
+	err := InitLogger(TelemetryConfig{LogLevel: "verbose"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid config.LogLevel")
 }
