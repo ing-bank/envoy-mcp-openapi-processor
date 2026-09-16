@@ -5,7 +5,7 @@ go 1.25.3
 require (
 	github.com/envoyproxy/go-control-plane/envoy v1.39.0
 	github.com/getkin/kin-openapi v0.149.0
-	github.com/modelcontextprotocol/go-sdk v1.7.0
+	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/stretchr/testify v1.12.1
 	go.opentelemetry.io/contrib/bridges/otelzap v0.20.1
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.71.0
