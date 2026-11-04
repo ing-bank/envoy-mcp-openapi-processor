@@ -3,8 +3,8 @@ module github.com/ing-bank/envoy-mcp-openapi-processor
 go 1.26.0
 
 require (
-	github.com/envoyproxy/go-control-plane/envoy v1.39.0
-	github.com/getkin/kin-openapi v0.149.0
+	github.com/envoyproxy/go-control-plane/envoy v1.40.0
+	github.com/getkin/kin-openapi v0.151.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/stretchr/testify v1.12.1
 	go.opentelemetry.io/contrib/bridges/otelzap v0.21.0
