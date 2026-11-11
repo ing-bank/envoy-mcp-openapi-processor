@@ -1,4 +1,4 @@
-FROM golang:1.27.2 AS builder
+FROM golang:1.27.3 AS builder
 WORKDIR /src
 # copy ext_proc deps info
 COPY go.mod go.sum ./
